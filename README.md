@@ -82,16 +82,37 @@ $env:NEXT_PUBLIC_BASE_PATH="/my-repo"; npm run build; npm run verify:export; npm
 
 ## Публикация на GitHub Pages
 
-1. Создайте репозиторий на GitHub и запушьте проект в ветку `main`.
-2. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
-3. **Settings → Secrets and variables → Actions → вкладка Variables** — добавьте нужные переменные
-   из таблицы выше (кроме `NEXT_PUBLIC_BASE_PATH`). Это именно *Variables*, не *Secrets*: значения публичные.
-4. Пуш в `main` (или ручной запуск во вкладке Actions) запускает `.github/workflows/deploy.yml`:
-   `npm ci` → typecheck → lint → build → verify:export → публикация.
-5. Адрес появится в логе шага Deploy: `https://<username>.github.io/<repository>/`.
+Репозиторий: [apex3488/BayhanGame](https://github.com/apex3488/BayhanGame) →  
+сайт: https://apex3488.github.io/BayhanGame/
 
-Base path определяется автоматически через `actions/configure-pages`: `/<repository>` для project pages
-и пустой для `<username>.github.io` или собственного домена. Ничего хардкодить не нужно.
+> Если по ссылке виден **README**, а не приложение — в Settings → Pages выбран деплой **ветки main**
+> (Jekyll показывает README, потому что в корне репозитория нет `index.html`). Нужно публиковать
+> собранную папку `out/` через Actions или ветку `gh-pages`.
+
+### Обязательная настройка Pages (один раз)
+
+Откройте **Settings → Pages → Build and deployment** и выберите **один** вариант:
+
+**Вариант A (рекомендуется):** Source → **GitHub Actions**
+
+**Вариант B:** Source → **Deploy from a branch** → Branch: **`gh-pages`** / folder: `/ (root)`  
+Workflow сам обновляет ветку `gh-pages` содержимым `out/`.
+
+Не выбирайте `main` как источник Pages — иначе снова откроется README.
+
+### После настройки
+
+1. **Settings → Secrets and variables → Actions → Variables** — публичные `NEXT_PUBLIC_*`
+   (кроме `NEXT_PUBLIC_BASE_PATH`). Не кладите туда BOT_TOKEN / service_role.
+2. Пуш в `main` или Actions → **Deploy to GitHub Pages** → Run workflow.
+3. Workflow: `npm ci` → typecheck → lint → build с `basePath=/BayhanGame` → verify → деплой `out/`.
+
+Локальная проверка с тем же подпутём:
+
+```powershell
+$env:NEXT_PUBLIC_BASE_PATH="/BayhanGame"; npm run build; npm run verify:export; npm run preview
+# http://localhost:4173/BayhanGame/
+```
 
 ## Подключение к Telegram
 

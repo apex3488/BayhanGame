@@ -5,8 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Publish the static export from ./out — never the repository root / README.
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -17,6 +18,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      base_path: ${{ steps.base.outputs.base_path }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,9 +28,26 @@ jobs:
           node-version: 22
           cache: npm
 
+      # May fail if Pages source is not yet "GitHub Actions" — we fall back to /BayhanGame.
       - name: Configure GitHub Pages
         id: pages
+        continue-on-error: true
         uses: actions/configure-pages@v5
+
+      - name: Resolve base path
+        id: base
+        shell: bash
+        run: |
+          BASE="${{ steps.pages.outputs.base_path }}"
+          # Project site https://apex3488.github.io/BayhanGame/ must use /BayhanGame
+          if [ -z "$BASE" ] || [ "$BASE" = "/" ]; then
+            BASE="/BayhanGame"
+          fi
+          # normalize: leading slash, no trailing slash
+          BASE="/${BASE#/}"
+          BASE="${BASE%/}"
+          echo "base_path=$BASE" >> "$GITHUB_OUTPUT"
+          echo "Using NEXT_PUBLIC_BASE_PATH=$BASE"
 
       - run: npm ci
       - run: npm run typecheck
@@ -36,9 +56,9 @@ jobs:
       - name: Build static export
         run: npm run build
         env:
-          # "/<repository>" for project pages, "" for user/organization pages or a custom domain.
-          NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path }}
-          # Public values only. Configure them in Settings → Secrets and variables → Actions → Variables.
+          NEXT_PUBLIC_BASE_PATH: ${{ steps.base.outputs.base_path }}
+          # Public only — configure in Settings → Secrets and variables → Actions → Variables.
+          # Never put BOT_TOKEN or service_role here.
           NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: ${{ vars.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME }}
           NEXT_PUBLIC_DATA_SOURCE: ${{ vars.NEXT_PUBLIC_DATA_SOURCE }}
           NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
@@ -49,12 +69,28 @@ jobs:
       - name: Verify static export
         run: npm run verify:export
         env:
-          NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          NEXT_PUBLIC_BASE_PATH: ${{ steps.base.outputs.base_path }}
 
-      - uses: actions/upload-pages-artifact@v4
+      - name: Ensure .nojekyll
+        run: |
+          test -f out/index.html
+          test -f out/.nojekyll || touch out/.nojekyll
+          # Guard: exported HTML must reference the repo base path, not bare /_next
+          grep -q "${{ steps.base.outputs.base_path }}/_next/" out/index.html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
         with:
           path: out
 
+      - name: Upload site artifact (for gh-pages branch)
+        uses: actions/upload-artifact@v4
+        with:
+          name: github-pages-site
+          path: out
+          retention-days: 3
+
+  # Official GitHub Pages deployment (requires Settings → Pages → Source: GitHub Actions)
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -62,6 +98,26 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy
+      - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # Fallback: publish the same out/ to the gh-pages branch.
+  # Use when Pages source is still "Deploy from a branch" → select branch gh-pages / root.
+  deploy-gh-pages-branch:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download site
+        uses: actions/download-artifact@v4
+        with:
+          name: github-pages-site
+          path: site
+
+      - name: Publish to gh-pages branch
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: site
+          branch: gh-pages
+          clean: true
+          single-commit: true
