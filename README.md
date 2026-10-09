@@ -87,18 +87,16 @@ $env:NEXT_PUBLIC_BASE_PATH="/my-repo"; npm run build; npm run verify:export; npm
 
 > Если по ссылке виден **README**, а не приложение — в Settings → Pages выбран деплой **ветки main**
 > (Jekyll показывает README, потому что в корне репозитория нет `index.html`). Нужно публиковать
-> собранную папку `out/` через Actions или ветку `gh-pages`.
+> собранную папку `out/` через **GitHub Actions**.
 
 ### Обязательная настройка Pages (один раз)
 
-Откройте **Settings → Pages → Build and deployment** и выберите **один** вариант:
+Откройте **Settings → Pages → Build and deployment**:
 
-**Вариант A (рекомендуется):** Source → **GitHub Actions**
+**Source → GitHub Actions**
 
-**Вариант B:** Source → **Deploy from a branch** → Branch: **`gh-pages`** / folder: `/ (root)`  
-Workflow сам обновляет ветку `gh-pages` содержимым `out/`.
-
-Не выбирайте `main` как источник Pages — иначе снова откроется README.
+Не выбирайте `main` (или другую ветку исходников) как источник Pages — иначе снова откроется README
+и может появиться конфликт с workflow деплоя.
 
 ### После настройки
 

@@ -5,9 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Publish the static export from ./out — never the repository root / README.
+# Requires Settings → Pages → Source: GitHub Actions.
+# Publishes only the static export from ./out (never the repo root / README).
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -21,14 +22,17 @@ jobs:
     outputs:
       base_path: ${{ steps.base.outputs.base_path }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      # May fail if Pages source is not yet "GitHub Actions" — we fall back to /BayhanGame.
+      # Resolves the Pages base path when Source is GitHub Actions.
+      # If unavailable, fall back to /BayhanGame for project sites.
       - name: Configure GitHub Pages
         id: pages
         continue-on-error: true
@@ -83,14 +87,6 @@ jobs:
         with:
           path: out
 
-      - name: Upload site artifact (for gh-pages branch)
-        uses: actions/upload-artifact@v4
-        with:
-          name: github-pages-site
-          path: out
-          retention-days: 3
-
-  # Official GitHub Pages deployment (requires Settings → Pages → Source: GitHub Actions)
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -101,23 +97,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-  # Fallback: publish the same out/ to the gh-pages branch.
-  # Use when Pages source is still "Deploy from a branch" → select branch gh-pages / root.
-  deploy-gh-pages-branch:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download site
-        uses: actions/download-artifact@v4
-        with:
-          name: github-pages-site
-          path: site
-
-      - name: Publish to gh-pages branch
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: site
-          branch: gh-pages
-          clean: true
-          single-commit: true
