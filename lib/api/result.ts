@@ -1,6 +1,7 @@
 export type ApiErrorCode =
   | "not_configured"
   | "unauthorized"
+  | "forbidden"
   | "insufficient_funds"
   | "already_owned"
   | "not_owned"
@@ -33,6 +34,7 @@ export function fail<T = never>(code: ApiErrorCode, detail?: string): ApiResult<
 const KNOWN_CODES: ReadonlySet<string> = new Set<ApiErrorCode>([
   "not_configured",
   "unauthorized",
+  "forbidden",
   "insufficient_funds",
   "already_owned",
   "not_owned",

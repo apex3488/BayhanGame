@@ -21,8 +21,24 @@ API — это отдельный процесс, использующий те 
 | `api` | Запросы к `NEXT_PUBLIC_GAME_API_URL` (Mini App API рядом с ботом). |
 | `supabase` | Каталог и рейтинг — из Supabase, всё остальное — через Edge Function (см. `SUPABASE_SETUP.md`). |
 
-Даже при `api`/`supabase` приложение переключится в DEMO, если открыто не в Telegram (нет `initData`)
-или конфигурация неполная. Причина видна в «Настройки → Диагностика».
+Даже при `api`/`supabase` приложение **не** подставляет демо-баланс, если открыто не в Telegram
+(нет подписанного `initData`) или конфигурация неполная: показывается баннер «Нет подключения».
+Причина видна в «Настройки → Диагностика».
+
+### Текущий FastAPI backend (реализовано)
+
+Источник `api` ходит в Python `miniapp_api` (тот же SQLite, что у бота):
+
+| Метод | Путь | Ответ |
+| --- | --- | --- |
+| GET | `/health` | `{ "status": "ok", "service": "bayhan-miniapp-api" }` |
+| GET | `/api/me` | профиль игрока (snake_case, балансы — строки Decimal) |
+
+Адаптер: `lib/api/bayhan-api-game-api.ts`. Остальные операции GameApi пока возвращают
+`not_configured` (покупки/награды не вызываются, пока нет безопасных write-эндпоинтов).
+
+`GET /api/me` отвечает **без** обёртки `{ ok, data }` — это обычный FastAPI JSON.
+HTTP: `401` → `unauthorized`, `403` → `forbidden`, `404` → `not_found`.
 
 ## 2. Аутентификация
 

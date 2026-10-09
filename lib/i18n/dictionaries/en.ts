@@ -34,6 +34,7 @@ const en: Dictionary = {
     title: "Couldn't load data",
     not_configured: "The game server is not connected yet",
     unauthorized: "Open the app from Telegram to sign in",
+    forbidden: "Access denied: account is banned",
     insufficient_funds: "Insufficient funds",
     already_owned: "You already own this item",
     not_owned: "Get this item first",

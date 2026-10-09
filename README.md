@@ -73,8 +73,8 @@ $env:NEXT_PUBLIC_BASE_PATH="/my-repo"; npm run build; npm run verify:export; npm
 | Переменная | Назначение |
 | --- | --- |
 | `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` | имя бота **без @** — для кнопки «Вернуться в бот». Если не задано, кнопка неактивна |
-| `NEXT_PUBLIC_DATA_SOURCE` | `demo` \| `api` \| `supabase` |
-| `NEXT_PUBLIC_GAME_API_URL` | базовый URL Mini App API (режим `api`) |
+| `NEXT_PUBLIC_DATA_SOURCE` | `demo` \| `api` \| `supabase` — для живого профиля с ботом: `api` |
+| `NEXT_PUBLIC_GAME_API_URL` | базовый URL FastAPI (`GET /health`, `GET /api/me`), без `/` в конце |
 | `NEXT_PUBLIC_SUPABASE_URL` | URL проекта Supabase |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | только anon / publishable ключ (секретные ключи отклоняются) |
 | `NEXT_PUBLIC_SUPABASE_FUNCTION_NAME` | имя Edge Function, по умолчанию `miniapp-api` |

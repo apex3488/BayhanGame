@@ -5,7 +5,7 @@ import { createPublicSupabaseGameApi } from "@/lib/supabase/public-supabase-game
 import { createSupabaseGameApi } from "@/lib/supabase/supabase-game-api";
 import type { TelegramSession } from "@/lib/telegram/webapp";
 import type { DataSourceKind, GameApi } from "./game-api";
-import { createHttpGameApi } from "./http-game-api";
+import { createBayhanApiGameApi } from "./bayhan-api-game-api";
 import type { ApiErrorCode } from "./result";
 import { createUnavailableGameApi } from "./unavailable-game-api";
 
@@ -84,7 +84,7 @@ export function createGameApi(session: TelegramSession): { api: GameApi; state: 
 
   setDemoSandboxEnabled(false);
   return {
-    api: createHttpGameApi({ kind: "api", baseUrl: env.gameApiUrl, initData: session.initData }),
+    api: createBayhanApiGameApi({ baseUrl: env.gameApiUrl, initData: session.initData }),
     state: { requested, active: "api", isDemo: false, blockReason: null },
   };
 }

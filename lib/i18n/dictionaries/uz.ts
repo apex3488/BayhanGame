@@ -34,6 +34,7 @@ const uz: Dictionary = {
     title: "Ma'lumotlarni yuklab bo'lmadi",
     not_configured: "O'yin serveri hali ulanmagan",
     unauthorized: "Kirish uchun ilovani Telegram orqali oching",
+    forbidden: "Kirish taqiqlangan: akkaunt bloklangan",
     insufficient_funds: "Mablag' yetarli emas",
     already_owned: "Bu buyum inventarda allaqachon bor",
     not_owned: "Avval bu buyumni oling",

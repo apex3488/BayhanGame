@@ -72,12 +72,15 @@ export function createHttpGameApi(options: HttpGameApiOptions): GameApi {
       return fail(response.status === 401 ? "unauthorized" : "invalid_response", `HTTP ${response.status}`);
     }
 
+    if (response.status === 401) return fail("unauthorized", `HTTP 401`);
+    if (response.status === 403) return fail("forbidden", `HTTP 403`);
+
     if (!isRecord(payload)) return fail("invalid_response", "Envelope is not an object");
     if (payload.ok === true) {
       return guard(payload.data) ? ok(payload.data) : fail("invalid_response", `Unexpected data shape for ${path}`);
     }
     const error = isRecord(payload.error) ? payload.error : {};
-    const code = response.status === 401 ? "unauthorized" : toErrorCode(error.code);
+    const code = toErrorCode(error.code);
     return fail(code, typeof error.message === "string" ? error.message : `HTTP ${response.status}`);
   }
 
