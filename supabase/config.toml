@@ -1,0 +1,5 @@
+# Minimal Supabase CLI config for this frontend repo.
+# Link with: supabase link --project-ref iflqtvazzfxfwybxkhxl
+
+[functions.miniapp-api]
+verify_jwt = false

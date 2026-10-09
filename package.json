@@ -1,0 +1,35 @@
+{
+  "name": "bayhan-game-miniapp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BAYHAN GAME — Telegram Mini App (static Next.js export for GitHub Pages)",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "preview": "node scripts/serve-static.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "verify:export": "node scripts/verify-static-export.mjs",
+    "check": "npm run typecheck && npm run lint && npm run build && npm run verify:export"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.3",
+    "lucide-react": "^1.54.0",
+    "next": "16.4.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "16.4.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3"
+  }
+}
