@@ -333,6 +333,12 @@ const uz: Dictionary = {
     connectionFailed: "Xato: {reason}",
     unsafeKey: "Kalit rad etildi: maxfiy kalitga o'xshaydi",
     gameApi: "Game API",
+    profileLoad: "Profil yuklash",
+    profileLoadNone: "So'rov hali yo'q",
+    profileStage: "Bosqich",
+    profileHttp: "HTTP",
+    profileCode: "Kod",
+    profileHasInitData: "So'rovdagi initData",
   },
   city: {
     title: "Shahar",

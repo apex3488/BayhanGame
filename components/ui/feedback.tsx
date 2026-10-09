@@ -25,7 +25,7 @@ export function SkeletonList({ rows = 3, className }: { rows?: number; className
 interface EmptyStateProps {
   icon: LucideIcon;
   title: string;
-  description?: string;
+  description?: ReactNode;
   action?: ReactNode;
   className?: string;
 }
@@ -50,11 +50,24 @@ export function ErrorState({ error, onRetry, className }: { error: ApiError | un
   // not_configured means an optional endpoint is not wired yet — not a hard outage.
   const title = code === "not_configured" ? t.connection.notConfiguredTitle : t.errors.title;
   const message = error ? t.errors[error.code] : t.errors.unknown;
+  const safeMeta = [
+    code,
+    error?.httpStatus != null ? `HTTP ${error.httpStatus}` : null,
+    error?.stage ?? null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
     <EmptyState
       icon={CloudOff}
       title={title}
-      description={message}
+      description={
+        <>
+          <span>{message}</span>
+          {safeMeta ? <span className="mt-1.5 block text-[11px] text-mist-500">{safeMeta}</span> : null}
+        </>
+      }
       className={className}
       action={
         onRetry && code !== "not_configured" ? (

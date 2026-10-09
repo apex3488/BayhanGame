@@ -8,12 +8,23 @@ import { DEFAULT_LOCALE, isLocale, LOCALE_STORAGE_KEY, matchLocale } from "@/lib
 import { I18nProvider } from "@/lib/i18n/i18n-provider";
 import { loadPreferences, PreferencesProvider } from "@/lib/preferences/preferences-provider";
 import { GameApiProvider } from "@/lib/state/game-api-context";
+import { invalidateResources } from "@/lib/state/resource-store";
 import { TelegramProvider } from "@/lib/telegram/telegram-provider";
 import { activateTelegram, readTelegramSession } from "@/lib/telegram/webapp";
 import { readStorage } from "@/lib/utils/storage";
 import type { Locale } from "@/types/game";
 import { AppShell } from "./app-shell";
 import { SplashScreen } from "./splash-screen";
+
+/** Drop cached player/API reads when Telegram auth or GameApi adapter changes. */
+function invalidateLiveCaches(): void {
+  invalidateResources("player:");
+  invalidateResources("activity:");
+  invalidateResources("tasks:");
+  invalidateResources("catalog:");
+  invalidateResources("inventory");
+  invalidateResources("leaderboard:");
+}
 
 const noopSubscribe = () => () => {};
 
@@ -52,6 +63,10 @@ function ClientApp({ children }: { children: ReactNode }) {
         ) {
           return current;
         }
+
+        // HomeHeader calls usePlayer even while unavailable; an early unauthorized
+        // result must not stick after initData arrives and the live API is wired.
+        invalidateLiveCaches();
 
         return {
           ...current,

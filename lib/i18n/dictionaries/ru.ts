@@ -331,6 +331,12 @@ const ru = {
     connectionFailed: "Ошибка: {reason}",
     unsafeKey: "Ключ отклонён: похож на секретный",
     gameApi: "Game API",
+    profileLoad: "Загрузка профиля",
+    profileLoadNone: "Запросов ещё не было",
+    profileStage: "Этап",
+    profileHttp: "HTTP",
+    profileCode: "Код",
+    profileHasInitData: "initData при запросе",
   },
   city: {
     title: "Город",

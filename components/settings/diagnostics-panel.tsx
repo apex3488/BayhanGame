@@ -5,9 +5,11 @@ import { Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { checkGameApiConnection, type GameApiConnectionCheck } from "@/lib/api/check-game-api";
+import { getLastProfileLoadDiagnostic } from "@/lib/api/profile-load-diagnostic";
 import { env } from "@/lib/config/env";
 import { useI18n } from "@/lib/i18n/i18n-provider";
 import { useGameApi } from "@/lib/state/game-api-context";
+import { usePlayer } from "@/lib/services/player-service";
 import { checkSupabaseConnection, getSupabaseConfigStatus, type ConnectionCheck } from "@/lib/supabase/client";
 import { useTelegram } from "@/lib/telegram/telegram-provider";
 import { cn } from "@/lib/utils/cn";
@@ -31,10 +33,16 @@ export function DiagnosticsPanel() {
   const { t, format } = useI18n();
   const telegram = useTelegram();
   const { source } = useGameApi();
+  const player = usePlayer();
   const supabase = getSupabaseConfigStatus();
   const [check, setCheck] = useState<ConnectionCheck | null>(null);
   const [apiCheck, setApiCheck] = useState<GameApiConnectionCheck | null>(null);
   const [checking, setChecking] = useState(false);
+  // Re-read when player status/error changes (diagnostic is written inside getPlayer).
+  const profileDiag = getLastProfileLoadDiagnostic();
+  void player.status;
+  void player.error?.code;
+  void player.error?.httpStatus;
 
   const tgStatus =
     telegram.status === "telegram" ? t.settings.tgConnected : telegram.status === "browser" ? t.settings.tgBrowser : t.settings.tgSdkMissing;
@@ -118,6 +126,27 @@ export function DiagnosticsPanel() {
             }
             tone={apiCheck.ok ? "ok" : "muted"}
           />
+        )}
+
+        <GroupTitle>{t.settings.profileLoad}</GroupTitle>
+        {profileDiag ? (
+          <>
+            <Row
+              label={t.settings.profileHasInitData}
+              value={profileDiag.hasInitData ? t.settings.present : t.settings.absent}
+              tone={profileDiag.hasInitData ? "ok" : "muted"}
+            />
+            <Row label={t.settings.profileStage} value={profileDiag.stage} />
+            <Row
+              label={t.settings.profileHttp}
+              value={profileDiag.httpStatus == null ? "—" : String(profileDiag.httpStatus)}
+              tone={profileDiag.httpStatus === 200 ? "ok" : "muted"}
+            />
+            <Row label={t.settings.profileCode} value={profileDiag.code ?? "—"} />
+            <Row label={t.settings.host} value={profileDiag.apiHost ?? "—"} />
+          </>
+        ) : (
+          <Row label={t.settings.profileLoad} value={t.settings.profileLoadNone} tone="muted" />
         )}
       </dl>
       {(canCheckSupabase || canCheckGameApi) && (

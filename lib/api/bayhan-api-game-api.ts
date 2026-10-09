@@ -8,7 +8,8 @@ import type {
 } from "@/types/game";
 import type { DataSourceKind, GameApi } from "./game-api";
 import { isRecord } from "./guards";
-import { fail, ok, type ApiResult } from "./result";
+import { recordProfileLoadDiagnostic } from "./profile-load-diagnostic";
+import { fail, ok, type ApiErrorCode, type ApiFailureStage, type ApiResult } from "./result";
 
 const EMPTY_LOADOUT: Loadout = {
   frame: null,
@@ -28,15 +29,40 @@ export interface BayhanApiGameApiOptions {
 /**
  * Adapter for the Python FastAPI Mini App API (`miniapp_api`).
  *
- * Currently only `GET /api/me` is live. Other GameApi methods return
- * `not_configured` so the UI never invents balances or mutations.
+ * Live profile: GET /api/me with header X-Telegram-Init-Data (raw WebApp initData).
+ * Optional reads that are not implemented yet return empty lists (not fake balances).
+ * Mutations stay not_configured until write endpoints exist.
  */
 export function createBayhanApiGameApi(options: BayhanApiGameApiOptions): GameApi {
   const { baseUrl, initData, timeoutMs = 12_000 } = options;
   const root = baseUrl.replace(/\/+$/, "");
+  let apiHost: string | null = null;
+  try {
+    apiHost = new URL(root).host;
+  } catch {
+    apiHost = null;
+  }
+
+  function note(
+    stage: ApiFailureStage,
+    code: ApiErrorCode | null,
+    httpStatus: number | null,
+  ): void {
+    recordProfileLoadDiagnostic({
+      at: Date.now(),
+      hasInitData: Boolean(initData),
+      stage,
+      httpStatus,
+      code,
+      apiHost,
+    });
+  }
 
   async function fetchMe(): Promise<ApiResult<Player>> {
-    if (!initData) return fail("unauthorized", "Telegram initData is missing");
+    if (!initData) {
+      note("no_init_data", "unauthorized", null);
+      return fail("unauthorized", "Telegram initData is missing", { stage: "no_init_data" });
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -56,11 +82,12 @@ export function createBayhanApiGameApi(options: BayhanApiGameApiOptions): GameAp
       const aborted =
         (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError") ||
         (error instanceof Error && error.name === "AbortError");
+      note("network", "network", null);
       if (aborted) {
-        return fail("network", `Timeout after ${timeoutMs}ms contacting ${root}`);
+        return fail("network", `Timeout after ${timeoutMs}ms contacting ${root}`, { stage: "network" });
       }
       const message = error instanceof Error ? error.message : "fetch failed";
-      return fail("network", `${message} (${root})`);
+      return fail("network", `${message} (${root})`, { stage: "network" });
     } finally {
       clearTimeout(timer);
     }
@@ -69,24 +96,54 @@ export function createBayhanApiGameApi(options: BayhanApiGameApiOptions): GameAp
     try {
       payload = await response.json();
     } catch {
-      return fail(statusToCode(response.status), `HTTP ${response.status}: non-JSON body`);
+      const code = statusToCode(response.status);
+      note("parse", code, response.status);
+      return fail(code, `HTTP ${response.status}: non-JSON body`, {
+        httpStatus: response.status,
+        stage: "parse",
+      });
     }
 
     if (response.status === 401) {
-      return fail("unauthorized", detailFromFastApi(payload) ?? "HTTP 401");
+      note("http", "unauthorized", 401);
+      return fail("unauthorized", detailFromFastApi(payload) ?? "HTTP 401", {
+        httpStatus: 401,
+        stage: "http",
+      });
     }
     if (response.status === 403) {
-      return fail("forbidden", detailFromFastApi(payload) ?? "HTTP 403");
+      note("http", "forbidden", 403);
+      return fail("forbidden", detailFromFastApi(payload) ?? "HTTP 403", {
+        httpStatus: 403,
+        stage: "http",
+      });
     }
     if (response.status === 404) {
-      return fail("not_found", detailFromFastApi(payload) ?? "HTTP 404");
+      note("http", "not_found", 404);
+      return fail("not_found", detailFromFastApi(payload) ?? "HTTP 404", {
+        httpStatus: 404,
+        stage: "http",
+      });
     }
     if (!response.ok) {
-      return fail(statusToCode(response.status), detailFromFastApi(payload) ?? `HTTP ${response.status}`);
+      const code = statusToCode(response.status);
+      note("http", code, response.status);
+      return fail(code, detailFromFastApi(payload) ?? `HTTP ${response.status}`, {
+        httpStatus: response.status,
+        stage: "http",
+      });
     }
 
     const player = mapMeResponse(payload);
-    if (!player) return fail("invalid_response", "Unexpected /api/me payload");
+    if (!player) {
+      note("map", "invalid_response", response.status);
+      return fail("invalid_response", "Unexpected /api/me payload", {
+        httpStatus: response.status,
+        stage: "map",
+      });
+    }
+
+    note("ok", null, response.status);
     return ok(player);
   }
 

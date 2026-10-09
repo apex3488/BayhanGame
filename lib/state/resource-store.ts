@@ -88,6 +88,17 @@ export function invalidateResources(prefix: string): void {
   if (changed) emit();
 }
 
+/** Test-only helpers — not used by the UI. */
+export function resetResourceStoreForTests(): void {
+  entries.clear();
+  inflight.clear();
+  emit();
+}
+
+export function getEntryForTests<T>(key: string): ResourceEntry<T> {
+  return getEntry<T>(key);
+}
+
 export interface Resource<T> extends ResourceEntry<T> {
   reload: () => void;
 }
@@ -100,10 +111,11 @@ export function useResource<T>(key: string, loader: () => Promise<ApiResult<T>>)
   );
 
   useEffect(() => {
-    if (getEntry(key).status === "idle") void loadResource(key, loader);
-    // The key fully identifies the request; loader identity changes every render.
+    // Load on first mount (idle) and again after invalidateResources() resets the entry to idle.
+    // Do not depend on loader identity — it changes every render and would retry errors in a loop.
+    if (entry.status === "idle") void loadResource(key, loader);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, entry.status]);
 
   const reload = useCallback(() => void loadResource(key, loader, true), [key, loader]);
   return { ...entry, reload };

@@ -333,6 +333,12 @@ const en: Dictionary = {
     connectionFailed: "Error: {reason}",
     unsafeKey: "Key rejected: looks like a secret key",
     gameApi: "Game API",
+    profileLoad: "Profile load",
+    profileLoadNone: "No request yet",
+    profileStage: "Stage",
+    profileHttp: "HTTP",
+    profileCode: "Code",
+    profileHasInitData: "initData on request",
   },
   city: {
     title: "City",
