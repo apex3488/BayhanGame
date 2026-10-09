@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
@@ -19,15 +20,61 @@ const noopSubscribe = () => () => {};
 function bootstrap() {
   const session = readTelegramSession();
   const stored = readStorage(LOCALE_STORAGE_KEY);
-  const locale: Locale = isLocale(stored) ? stored : (matchLocale(session.user?.language_code) ?? DEFAULT_LOCALE);
-  return { session, locale, preferences: loadPreferences(), ...createGameApi(session) };
+  const locale: Locale = isLocale(stored)
+    ? stored
+    : (matchLocale(session.user?.language_code) ?? DEFAULT_LOCALE);
+
+  return {
+    session,
+    locale,
+    preferences: loadPreferences(),
+    ...createGameApi(session),
+  };
 }
 
 function ClientApp({ children }: { children: ReactNode }) {
-  const [boot] = useState(bootstrap);
+  const [boot, setBoot] = useState(bootstrap);
 
   useEffect(() => {
-    activateTelegram();
+    const syncTelegramSession = () => {
+      const session = readTelegramSession();
+
+      if (session.status !== "telegram" || !session.initData) {
+        return;
+      }
+
+      activateTelegram();
+
+      setBoot((current) => {
+        if (
+          current.session.status === "telegram" &&
+          current.session.initData === session.initData
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          session,
+          ...createGameApi(session),
+        };
+      });
+    };
+
+    syncTelegramSession();
+
+    const intervalId = window.setInterval(syncTelegramSession, 500);
+    const timeoutId = window.setTimeout(() => {
+      window.clearInterval(intervalId);
+    }, 10000);
+
+    document.addEventListener("visibilitychange", syncTelegramSession);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.clearTimeout(timeoutId);
+      document.removeEventListener("visibilitychange", syncTelegramSession);
+    };
   }, []);
 
   return (
@@ -45,16 +92,12 @@ function ClientApp({ children }: { children: ReactNode }) {
   );
 }
 
-/**
- * The static HTML only contains the splash screen. Everything that depends on the
- * browser (Telegram SDK, localStorage, language) is read after hydration, which keeps
- * server and client markup identical and avoids hydration mismatches.
- */
 export function AppRoot({ children }: { children: ReactNode }) {
   const isClient = useSyncExternalStore(
     noopSubscribe,
     () => true,
     () => false,
   );
+
   return isClient ? <ClientApp>{children}</ClientApp> : <SplashScreen />;
 }
