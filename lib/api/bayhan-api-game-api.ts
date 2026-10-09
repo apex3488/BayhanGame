@@ -1,4 +1,11 @@
-import type { EquipSlot, LeaderboardCategory, Locale, Loadout, Player } from "@/types/game";
+import type {
+  EquipSlot,
+  Leaderboard,
+  LeaderboardCategory,
+  Locale,
+  Loadout,
+  Player,
+} from "@/types/game";
 import type { DataSourceKind, GameApi } from "./game-api";
 import { isRecord } from "./guards";
 import { fail, ok, type ApiResult } from "./result";
@@ -46,7 +53,14 @@ export function createBayhanApiGameApi(options: BayhanApiGameApiOptions): GameAp
         credentials: "omit",
       });
     } catch (error) {
-      return fail("network", error instanceof Error ? error.message : "fetch failed");
+      const aborted =
+        (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError") ||
+        (error instanceof Error && error.name === "AbortError");
+      if (aborted) {
+        return fail("network", `Timeout after ${timeoutMs}ms contacting ${root}`);
+      }
+      const message = error instanceof Error ? error.message : "fetch failed";
+      return fail("network", `${message} (${root})`);
     } finally {
       clearTimeout(timer);
     }
@@ -76,21 +90,35 @@ export function createBayhanApiGameApi(options: BayhanApiGameApiOptions): GameAp
     return ok(player);
   }
 
-  const unimplemented = <T,>(): Promise<ApiResult<T>> =>
+  /** Mutations stay blocked until real write endpoints exist — never fake success. */
+  const mutationPending = <T,>(): Promise<ApiResult<T>> =>
     Promise.resolve(fail("not_configured", "Endpoint is not implemented on the Mini App API yet"));
+
+  /**
+   * Optional reads that the FastAPI does not expose yet.
+   * Return empty success so the UI does not show a fatal "failed to load" for
+   * activity/tasks/store while profile/balance from /api/me works.
+   * This is not demo data — just an honest empty catalog until endpoints land.
+   */
+  const emptyLeaderboard = (category: LeaderboardCategory): Leaderboard => ({
+    category,
+    entries: [],
+    me: null,
+    updatedAt: null,
+  });
 
   return {
     kind: "api" satisfies DataSourceKind,
     getPlayer: (_locale: Locale) => fetchMe(),
-    getActivity: () => unimplemented(),
-    claimDailyReward: () => unimplemented(),
-    getStoreCatalog: () => unimplemented(),
-    getInventory: () => unimplemented(),
-    purchaseItem: () => unimplemented(),
-    equipItem: (_slot: EquipSlot, _itemId: string | null) => unimplemented(),
-    getLeaderboard: (_category: LeaderboardCategory, _limit: number) => unimplemented(),
-    getTasks: () => unimplemented(),
-    claimTaskReward: () => unimplemented(),
+    getActivity: async () => ok([]),
+    claimDailyReward: () => mutationPending(),
+    getStoreCatalog: async () => ok([]),
+    getInventory: async () => ok([]),
+    purchaseItem: () => mutationPending(),
+    equipItem: (_slot: EquipSlot, _itemId: string | null) => mutationPending(),
+    getLeaderboard: async (category: LeaderboardCategory, _limit: number) => ok(emptyLeaderboard(category)),
+    getTasks: async () => ok([]),
+    claimTaskReward: () => mutationPending(),
   };
 }
 

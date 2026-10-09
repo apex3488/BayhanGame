@@ -46,19 +46,22 @@ export function EmptyState({ icon: Icon, title, description, action, className }
 
 export function ErrorState({ error, onRetry, className }: { error: ApiError | undefined; onRetry?: () => void; className?: string }) {
   const { t } = useI18n();
+  const code = error?.code;
+  // not_configured means an optional endpoint is not wired yet — not a hard outage.
+  const title = code === "not_configured" ? t.connection.notConfiguredTitle : t.errors.title;
   const message = error ? t.errors[error.code] : t.errors.unknown;
   return (
     <EmptyState
       icon={CloudOff}
-      title={t.errors.title}
+      title={title}
       description={message}
       className={className}
       action={
-        onRetry && (
+        onRetry && code !== "not_configured" ? (
           <Button variant="secondary" size="sm" onClick={onRetry}>
             {t.common.retry}
           </Button>
-        )
+        ) : undefined
       }
     />
   );

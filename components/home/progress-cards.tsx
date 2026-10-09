@@ -50,6 +50,7 @@ export function RankCard() {
   const { t } = useI18n();
   const board = useLeaderboard("capital", 10);
   const me = board.data?.me ?? null;
+  const ready = board.status === "success" || board.status === "error";
 
   return (
     <Link href="/leaderboard" className="press surface relative flex flex-col overflow-hidden p-4 hover:border-brand-400/30">
@@ -58,7 +59,7 @@ export function RankCard() {
         <Trophy className="size-3.5 text-brand-300" aria-hidden />
         {t.home.rankTitle}
       </span>
-      {board.data ? (
+      {ready ? (
         <span className="tabular relative mt-2 text-[34px] leading-none font-bold tracking-[-0.04em]">
           {me ? `#${me.rank}` : <span className="text-lg text-mist-300">{t.home.unranked}</span>}
         </span>

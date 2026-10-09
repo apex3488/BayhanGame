@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "verify:export": "node scripts/verify-static-export.mjs",
+    "doctor": "node scripts/doctor.mjs",
     "check": "npm run typecheck && npm run lint && npm run build && npm run verify:export"
   },
   "dependencies": {

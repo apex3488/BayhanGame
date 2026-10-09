@@ -188,7 +188,31 @@ VIP, донат Stars, промокоды, недвижимость, авто, �
 `/business/collect`, `/cases/open`, `/resources/mine`) с проверкой `initData` и
 идемпотентностью — суммы и награды только с сервера.
 
-## 9. Чеклист
+## 9. Публичный доступ к API (обязательно для Telegram)
+
+Единый источник данных — SQLite бота (`apex_game.db`). FastAPI `miniapp_api` читает ту же БД.
+GitHub Pages отдаёт только статику; браузер Telegram ходит на `NEXT_PUBLIC_GAME_API_URL`.
+
+Минимальная рабочая схема на вашей машине:
+
+1. Запущен API: `uvicorn miniapp_api.main:app --host 127.0.0.1 --port 8000`
+2. Запущен HTTPS-туннель на этот порт (Cloudflare Quick Tunnel или постоянный хост).
+3. `GET https://<tunnel>/health` → `200` и `{"status":"ok",...}`.
+4. В GitHub → **Settings → Secrets and variables → Actions → Variables**:
+   - `NEXT_PUBLIC_DATA_SOURCE` = `api`
+   - `NEXT_PUBLIC_GAME_API_URL` = `https://<tunnel>` (без `/` в конце)
+   - `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` = имя бота без `@`
+5. Пересобрать Pages (workflow **Deploy to GitHub Pages**), потому что URL **вшивается в JS при build**.
+6. В BotFather Mini App URL = `https://apex3488.github.io/BayhanGame/`.
+7. Игрок хотя бы раз написал боту `/start` (иначе `/api/me` → `404`).
+
+Quick Tunnel (`*.trycloudflare.com`) **одноразовый**: после остановки `cloudflared` старый URL даёт 530/DNS error.
+Тогда нужно новый туннель → обновить Variable → перезапустить workflow. Для продакшена лучше постоянный HTTPS-хост API.
+
+`401` на `/api/me` без заголовка или с битой подписью — ожидаемое поведение (проверка HMAC включена).
+В обычном браузере без Telegram `initData` баланс не загрузится — это не баг.
+
+## 10. Чеклист
 
 - [ ] `BOT_TOKEN` есть только на сервере API, не во фронтенде и не в репозитории.
 - [ ] Каждая операция проверяет подпись и срок `initData`.
@@ -197,3 +221,4 @@ VIP, донат Stars, промокоды, недвижимость, авто, �
 - [ ] CORS ограничен доменом GitHub Pages.
 - [ ] Ответы соответствуют `types/game.ts` (проверьте в «Настройки → Диагностика», режим LIVE).
 - [ ] Практические режимы в Mini App остаются без реальных ставок, пока игры не перенесены на сервер.
+- [ ] Публичный `NEXT_PUBLIC_GAME_API_URL` отвечает `/health` = 200 из интернета.

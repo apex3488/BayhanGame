@@ -56,6 +56,7 @@ npm run dev                  # http://localhost:3000
 | `npm run typecheck` | TypeScript без эмита |
 | `npm run lint` | ESLint |
 | `npm run verify:export` | проверка `out/`: все маршруты, `.nojekyll`, пути ассетов под base path, отсутствие секретов и серверных роутов |
+| `npm run doctor` | одна команда: локальный API, публичный `/health`, URL в Pages, CORS, типовой `401` на `/api/me` |
 | `npm run check` | всё вышеперечисленное подряд |
 
 Проверить сборку под подпутём, как на GitHub Pages:
@@ -74,7 +75,7 @@ $env:NEXT_PUBLIC_BASE_PATH="/my-repo"; npm run build; npm run verify:export; npm
 | --- | --- |
 | `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` | имя бота **без @** — для кнопки «Вернуться в бот». Если не задано, кнопка неактивна |
 | `NEXT_PUBLIC_DATA_SOURCE` | `demo` \| `api` \| `supabase` — для живого профиля с ботом: `api` |
-| `NEXT_PUBLIC_GAME_API_URL` | базовый URL FastAPI (`GET /health`, `GET /api/me`), без `/` в конце |
+| `NEXT_PUBLIC_GAME_API_URL` | HTTPS URL FastAPI (`GET /health`, `GET /api/me`), без `/` в конце. **Не** `127.0.0.1` — Telegram/Pages не достучатся. Quick Tunnel (`*.trycloudflare.com`) должен быть запущен, иначе профиль/баланс не загрузятся |
 | `NEXT_PUBLIC_SUPABASE_URL` | URL проекта Supabase |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | только anon / publishable ключ (секретные ключи отклоняются) |
 | `NEXT_PUBLIC_SUPABASE_FUNCTION_NAME` | имя Edge Function, по умолчанию `miniapp-api` |

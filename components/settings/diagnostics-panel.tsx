@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import { Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { checkGameApiConnection, type GameApiConnectionCheck } from "@/lib/api/check-game-api";
 import { env } from "@/lib/config/env";
 import { useI18n } from "@/lib/i18n/i18n-provider";
 import { useGameApi } from "@/lib/state/game-api-context";
@@ -32,14 +33,23 @@ export function DiagnosticsPanel() {
   const { source } = useGameApi();
   const supabase = getSupabaseConfigStatus();
   const [check, setCheck] = useState<ConnectionCheck | null>(null);
+  const [apiCheck, setApiCheck] = useState<GameApiConnectionCheck | null>(null);
   const [checking, setChecking] = useState(false);
 
   const tgStatus =
     telegram.status === "telegram" ? t.settings.tgConnected : telegram.status === "browser" ? t.settings.tgBrowser : t.settings.tgSdkMissing;
 
+  const canCheckSupabase = getSupabaseConfigStatus().state === "configured";
+  const canCheckGameApi = Boolean(env.gameApiUrl);
+
   async function runCheck() {
     setChecking(true);
-    setCheck(await checkSupabaseConnection());
+    const [supabaseResult, gameApiResult] = await Promise.all([
+      canCheckSupabase ? checkSupabaseConnection() : Promise.resolve(null),
+      canCheckGameApi ? checkGameApiConnection() : Promise.resolve(null),
+    ]);
+    if (supabaseResult) setCheck(supabaseResult);
+    if (gameApiResult) setApiCheck(gameApiResult);
     setChecking(false);
   }
 
@@ -98,8 +108,19 @@ export function DiagnosticsPanel() {
           value={env.gameApiUrl ? `${t.settings.configured} · ${new URL(env.gameApiUrl).host}` : t.settings.notConfigured}
           tone={env.gameApiUrl ? "ok" : "muted"}
         />
+        {apiCheck && (
+          <Row
+            label={t.settings.checkConnection}
+            value={
+              apiCheck.ok
+                ? t.settings.connectionOk
+                : format(t.settings.connectionFailed, { reason: apiCheck.reason })
+            }
+            tone={apiCheck.ok ? "ok" : "muted"}
+          />
+        )}
       </dl>
-      {supabase.state === "configured" && (
+      {(canCheckSupabase || canCheckGameApi) && (
         <Button
           variant="secondary"
           size="sm"
