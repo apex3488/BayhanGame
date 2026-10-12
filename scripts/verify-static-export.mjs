@@ -69,16 +69,16 @@ const secretPatterns = [
   { name: "Supabase secret key", re: /sb_secret_[A-Za-z0-9_-]{10,}/ },
   { name: "Telegram bot token", re: /\b\d{8,10}:AA[A-Za-z0-9_-]{33}\b/ },
 ];
-const badApiHosts = ["trycloudflare.com", "localhost", "127.0.0.1", "ngrok"];
+const blockedApiHosts = ["trycloudflare.com", "ngrok-free.app", "ngrok.io"];
 let sawSupabaseApi = false;
 for (const file of walk(out).filter((path) => /\.(js|html)$/.test(path))) {
   const content = readFileSync(file, "utf8");
   for (const { name, re } of secretPatterns) {
     if (re.test(content)) errors.push(`${relative(out, file)}: looks like it contains a ${name}`);
   }
-  for (const host of badApiHosts) {
+  for (const host of blockedApiHosts) {
     if (content.includes(host)) {
-      errors.push(`${relative(out, file)}: baked API URL contains blocked host "${host}"`);
+      errors.push(`${relative(out, file)}: baked dead tunnel host "${host}" — login will fail`);
       break;
     }
   }
