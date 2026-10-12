@@ -7,10 +7,19 @@
 next-env.d.ts
 *.tsbuildinfo
 
-# env files (keep only the example)
+# env files (keep example + production public URLs/anon for Pages)
 .env
 .env.*
 !.env.example
+!.env.production
+
+# Independent Mini App backend data (never commit live DB)
+/backend/.env
+/backend/data/*.db
+/backend/data/*.db-*
+/backend/.venv/
+/backend/**/__pycache__/
+/backend/.pytest_cache/
 
 # logs
 npm-debug.log*

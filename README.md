@@ -1,169 +1,124 @@
-# BAYHAN GAME — Telegram Mini App
+# BAYHAN GAME Mini App (v2 — independent browser game)
 
-Мобильное веб-приложение для Telegram-бота BAYHAN GAME: профиль, баланс, ежедневная награда,
-BAYHAN STORE, рейтинг, задания, тренировочные Mines / Up/Down / Slots, а также хаб **Город**
-со всеми разделами бота — работы, банк, магазин ресурсов, VIP, донат, промокоды, недвижимость,
-авто, бизнес, кейсы, добыча, рефералы, корпорации, брак, события.
+Профессиональный браузерный игровой клиент с **собственной** регистрацией, экономикой, Crash и админкой.
 
-Приложение — полностью статический сайт (Next.js `output: "export"`), который публикуется на GitHub Pages.
-У него нет собственного сервера, API-роутов и секретов. Реальные данные игрока подключаются через
-отдельный backend рядом с Python-ботом или через Supabase Edge Function.
+Telegram-бот в `Desktop/apex game` и его SQLite `apex_game.db` — **отдельная система**. Этот проект их не читает и не изменяет.
 
-- Интерфейс: RU / UZ / EN (по умолчанию — язык Telegram, иначе русский).
-- Mobile-first (320–430 px), safe-area Telegram, планшет и десктоп с боковой навигацией.
-- Палитра: чёрный, синий, белый.
+## Что реализовано
 
-## Режимы данных
+- Регистрация / вход по логину и паролю (JWT)
+- Стартовый баланс **$50,000** один раз на аккаунт (сервер)
+- Кошелёк + банк + история операций
+- **Crash** — серверные раунды, ставки, cash out, защита от двойной выплаты
+- Промокоды Mini App (отдельно от бота)
+- Админка `/admin` + bootstrap первого админа
+- Frontend: Next.js static export для GitHub Pages (`basePath` `/BayhanGame` в CI)
+- **База данных: Supabase Postgres** (`public.ma_*` таблицы)
+- **API production: Edge Function** `bayhan-api`  
+  `https://iflqtvazzfxfwybxkhxl.supabase.co/functions/v1/bayhan-api`
+- Опционально локальный FastAPI в `backend/` (SQLite) для разработки
 
-| Режим | Когда | Что видно |
-| --- | --- | --- |
-| **DEMO** | только если `NEXT_PUBLIC_DATA_SOURCE=demo` | песочница в памяти; явно помечена DEMO; для локального UI |
-| **LIVE · API** | `DATA_SOURCE=api` + Telegram `initData` + URL API | данные из Mini App API рядом с ботом |
-| **LIVE · Supabase** | `DATA_SOURCE=supabase` + Telegram `initData` + конфиг | каталог/рейтинг (RLS), профиль и операции — Edge Function |
-| **НЕТ ПОДКЛЮЧЕНИЯ** | live выбран, но нет Telegram или конфига | **демопрофиль не подставляется**; баннер + диагностика |
-
-Режим и блокировка видны в «Профиль → Настройки → Диагностика».
-
-Mines, Up/Down и Slots в Mini App — **тренировочные**: отдельные фишки в памяти страницы, без влияния на баланс.
-Игры на игровую валюту остаются в боте.
-
-## Требования
-
-- Node.js ≥ 20.9 (в CI используется 22)
-- npm
-
-## Установка и запуск
-
-```bash
-npm install
-cp .env.example .env.local   # PowerShell: Copy-Item .env.example .env.local
-npm run dev                  # http://localhost:3000
-```
-
-Без `.env.local` приложение собирается и работает в DEMO-режиме.
-
-> Если `npm install` падает с `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (корпоративный прокси/антивирус),
-> используйте системные сертификаты: PowerShell — `$env:NODE_OPTIONS="--use-system-ca"`,
-> bash — `export NODE_OPTIONS=--use-system-ca`.
-
-### Команды
-
-| Команда | Что делает |
-| --- | --- |
-| `npm run dev` | dev-сервер |
-| `npm run build` | статическая сборка в `out/` |
-| `npm run preview` | раздаёт `out/` так же, как GitHub Pages (учитывает `NEXT_PUBLIC_BASE_PATH`), порт 4173 |
-| `npm run typecheck` | TypeScript без эмита |
-| `npm run lint` | ESLint |
-| `npm run verify:export` | проверка `out/`: все маршруты, `.nojekyll`, пути ассетов под base path, отсутствие секретов и серверных роутов |
-| `npm run doctor` | одна команда: локальный API, публичный `/health`, URL в Pages, CORS, типовой `401` на `/api/me` |
-| `npm run check` | всё вышеперечисленное подряд |
-
-Проверить сборку под подпутём, как на GitHub Pages:
-
-```powershell
-$env:NEXT_PUBLIC_BASE_PATH="/my-repo"; npm run build; npm run verify:export; npm run preview
-# открыть http://localhost:4173/my-repo/
-```
-
-## Переменные окружения
-
-Все переменные `NEXT_PUBLIC_*` встраиваются в публичный JavaScript. **Не помещайте туда токен бота,
-`service_role` key или другие секреты.**
-
-| Переменная | Назначение |
-| --- | --- |
-| `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` | имя бота **без @** — для кнопки «Вернуться в бот». Если не задано, кнопка неактивна |
-| `NEXT_PUBLIC_DATA_SOURCE` | `demo` \| `api` \| `supabase` — для живого профиля с ботом: `api` |
-| `NEXT_PUBLIC_GAME_API_URL` | HTTPS URL FastAPI (`GET /health`, `GET /api/me`), без `/` в конце. **Не** `127.0.0.1` — Telegram/Pages не достучатся. Quick Tunnel (`*.trycloudflare.com`) должен быть запущен, иначе профиль/баланс не загрузятся |
-| `NEXT_PUBLIC_SUPABASE_URL` | URL проекта Supabase |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | только anon / publishable ключ (секретные ключи отклоняются) |
-| `NEXT_PUBLIC_SUPABASE_FUNCTION_NAME` | имя Edge Function, по умолчанию `miniapp-api` |
-| `NEXT_PUBLIC_BASE_PATH` | подпуть публикации. Локально пусто, в GitHub Actions подставляется автоматически |
-
-## Публикация на GitHub Pages
-
-Репозиторий: [apex3488/BayhanGame](https://github.com/apex3488/BayhanGame) →  
-сайт: https://apex3488.github.io/BayhanGame/
-
-> Если по ссылке виден **README**, а не приложение — в Settings → Pages выбран деплой **ветки main**
-> (Jekyll показывает README, потому что в корне репозитория нет `index.html`). Нужно публиковать
-> собранную папку `out/` через **GitHub Actions**.
-
-### Обязательная настройка Pages (один раз)
-
-Откройте **Settings → Pages → Build and deployment**:
-
-**Source → GitHub Actions**
-
-Не выбирайте `main` (или другую ветку исходников) как источник Pages — иначе снова откроется README
-и может появиться конфликт с workflow деплоя.
-
-### После настройки
-
-1. **Settings → Secrets and variables → Actions → Variables** — публичные `NEXT_PUBLIC_*`
-   (кроме `NEXT_PUBLIC_BASE_PATH`). Не кладите туда BOT_TOKEN / service_role.
-2. Пуш в `main` или Actions → **Deploy to GitHub Pages** → Run workflow.
-3. Workflow: `npm ci` → typecheck → lint → build с `basePath=/BayhanGame` → verify → деплой `out/`.
-
-Локальная проверка с тем же подпутём:
-
-```powershell
-$env:NEXT_PUBLIC_BASE_PATH="/BayhanGame"; npm run build; npm run verify:export; npm run preview
-# http://localhost:4173/BayhanGame/
-```
-
-## Подключение к Telegram
-
-1. В [@BotFather](https://t.me/BotFather): ваш бот → **Bot Settings → Menu Button** → URL из GitHub Pages
-   (или создайте Mini App через `/newapp`).
-2. Задайте `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` в Variables и перезапустите workflow.
-3. Откройте бота в Telegram и нажмите кнопку меню.
-
-В браузере вне Telegram приложение показывает предупреждение и работает в DEMO.
-
-## Что нужно сделать для реальных данных
-
-Фронтенд готов к работе с сервером, но сам сервер — отдельная часть, которая на GitHub Pages работать не может.
-Варианты:
-
-- **Mini App API рядом с Python-ботом** (рекомендуется — база остаётся у бота): см. [`docs/BOT_INTEGRATION.md`](docs/BOT_INTEGRATION.md).
-  Нужно реализовать 10 REST-эндпоинтов, проверку `initData` токеном бота и CORS.
-- **Supabase**: см. [`docs/SUPABASE_SETUP.md`](docs/SUPABASE_SETUP.md) — схема, RLS, Edge Function.
-
-## Безопасность
-
-- Токен бота и `service_role` ключ — только на сервере.
-- Клиент передаёт подписанный `initData` в заголовке `X-Telegram-Init-Data`; сервер проверяет HMAC.
-  `initDataUnsafe` используется только для отображения имени и аватара.
-- Баланс, покупки, экипировка и награды меняются только сервером; суммы наград берутся из ответа сервера.
-- Ответы сервера валидируются в рантайме; некорректные данные показываются как ошибка.
-- Предметы применяют оформление только по белому списку ключей — произвольный CSS с сервера не исполняется.
-- `.env*` (кроме `.env.example`) в `.gitignore`.
+Тренировочные Mines / Up/Down / Slots и хаб «Город» сохранены как UI; живая экономика — через Supabase API.
 
 ## Структура
 
+| Путь | Назначение |
+| --- | --- |
+| `app/`, `components/`, `lib/` | Next.js frontend |
+| `backend/` | Независимый FastAPI (см. `backend/README.md`) |
+| `docs/MINIAPP_V2.md` | Изоляция от бота, хостинг, безопасность |
+| `Desktop/bayhan-miniapp-backup-20261012/` | Резервная копия исходников (без секретов) |
+
+## Локальный запуск
+
+### 1) Backend (порт **8010**, чтобы не пересечься с ботом на 8000)
+
+```bat
+cd /d "C:\Users\Абдула\Desktop\game app\backend"
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+uvicorn app.main:app --host 127.0.0.1 --port 8010 --reload
 ```
-app/                    маршруты (/, games, store, leaderboard, profile, tasks, settings)
-components/             UI по разделам + общие компоненты (ui/, layout/)
-lib/api/                контракт GameApi, HTTP-адаптер, выбор источника данных, валидация ответов
-lib/demo/               демо-данные и песочница
-lib/supabase/           клиент, типы таблиц, Supabase-адаптер
-lib/services/           player / store / leaderboard / task сервисы и React-хуки
-lib/telegram/           обёртка над Telegram WebApp SDK
-lib/i18n/               словари RU/UZ/EN и форматирование
-lib/games/              логика тренировочных режимов
-scripts/                проверка экспорта и локальный static-сервер
-docs/                   интеграция с ботом и Supabase
+
+Проверка: http://127.0.0.1:8010/health → `is_bot_db: false`
+
+### 2) Frontend
+
+```bat
+cd /d "C:\Users\Абдула\Desktop\game app"
+copy .env.example .env.local
 ```
 
-## Ограничения
+В `.env.local`:
 
-- Тренировочные игры не связаны с балансом; реальные игры — в боте.
-- В DEMO данные сбрасываются при перезагрузке страницы.
-- Категории бота `name_color`, `title` и `box` в Mini App пока не отображаются.
-- Без backend нет персонального рейтинга, истории операций и синхронизации с ботом.
+```
+NEXT_PUBLIC_GAME_API_URL=http://127.0.0.1:8010
+NEXT_PUBLIC_BASE_PATH=
+```
 
----
+```bat
+npm install
+npm run dev
+```
 
-© BAYHAN STUDIO
+Откройте http://localhost:3000 → регистрация → баланс $50,000 → Crash / банк / промо.
+
+### Первый администратор
+
+1. В `backend/.env` задайте `MINIAPP_ADMIN_BOOTSTRAP_SECRET`
+2. `POST /api/admin/bootstrap` с JSON `{ "bootstrap_secret", "login", "password" }`
+3. Удалите bootstrap-секрет из env
+4. Войдите этим логином → `/admin`
+
+## Команды frontend
+
+| Команда | Назначение |
+| --- | --- |
+| `npm run dev` | dev-сервер |
+| `npm run build` | static export → `out/` |
+| `npm run preview` | раздача `out/` (порт 4173) |
+| `npm run typecheck` / `lint` / `test` | проверки |
+| `npm run doctor` | диагностика старого Pages/tunnel пути (legacy) |
+
+## Тесты backend
+
+```bat
+cd backend
+.venv\Scripts\activate
+set PYTHONPATH=%CD%
+pytest -q
+```
+
+## Переменные
+
+### Frontend (`NEXT_PUBLIC_*` попадают в бандл)
+
+| Переменная | Назначение |
+| --- | --- |
+| `NEXT_PUBLIC_GAME_API_URL` | URL независимого Mini App API |
+| `NEXT_PUBLIC_BASE_PATH` | локально пусто; в CI `/BayhanGame` |
+
+Секреты (`JWT`, bootstrap, пароли) **не** кладите в `NEXT_PUBLIC_*`.
+
+### Backend (`backend/.env`)
+
+См. `backend/.env.example`: `MINIAPP_DATABASE_URL`, `MINIAPP_JWT_SECRET`, `MINIAPP_ADMIN_BOOTSTRAP_SECRET`, CORS, лимиты Crash.
+
+**Запрещено** указывать путь к `apex_game.db`.
+
+## Публикация
+
+- **Frontend:** GitHub Pages (статический `out/`), как раньше.
+- **Backend:** нужен отдельный HTTPS-хост с **постоянным диском** для SQLite. GitHub Pages backend не запускает. Cloudflare Quick Tunnel — только временно.
+- Бесплатный постоянный хостинг на момент разработки **не подтверждён автоматически** — выберите PaaS с free tier + volume и проверьте сохранение файла БД после рестарта.
+
+## Изоляция от бота
+
+- Код бота не изменялся.
+- Новая БД: `backend/data/bayhan_miniapp.db`
+- API при старте отказывается работать, если URL указывает на `apex_game.db`
+- Промокоды/балансы/админка Mini App не связаны с ботом
+
+Подробнее: [`docs/MINIAPP_V2.md`](docs/MINIAPP_V2.md), [`backend/README.md`](backend/README.md)
