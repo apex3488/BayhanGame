@@ -69,11 +69,27 @@ const secretPatterns = [
   { name: "Supabase secret key", re: /sb_secret_[A-Za-z0-9_-]{10,}/ },
   { name: "Telegram bot token", re: /\b\d{8,10}:AA[A-Za-z0-9_-]{33}\b/ },
 ];
+const badApiHosts = ["trycloudflare.com", "localhost", "127.0.0.1", "ngrok"];
+let sawSupabaseApi = false;
 for (const file of walk(out).filter((path) => /\.(js|html)$/.test(path))) {
   const content = readFileSync(file, "utf8");
   for (const { name, re } of secretPatterns) {
     if (re.test(content)) errors.push(`${relative(out, file)}: looks like it contains a ${name}`);
   }
+  for (const host of badApiHosts) {
+    if (content.includes(host)) {
+      errors.push(`${relative(out, file)}: baked API URL contains blocked host "${host}"`);
+      break;
+    }
+  }
+  if (content.includes("supabase.co/functions")) sawSupabaseApi = true;
+}
+const expectedApi = (process.env.NEXT_PUBLIC_GAME_API_URL ?? "").trim();
+if (expectedApi && !expectedApi.includes("supabase.co/functions")) {
+  errors.push(`NEXT_PUBLIC_GAME_API_URL must be a Supabase Edge Function URL, got: ${expectedApi}`);
+}
+if (!sawSupabaseApi) {
+  errors.push("built assets do not contain a supabase.co/functions API URL — login will fail on Pages/Telegram");
 }
 
 if (errors.length > 0) {

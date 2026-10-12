@@ -57,8 +57,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
 
-      # Prefer Actions variables; fall back to committed .env.production so Telegram
-      # builds never ship without NEXT_PUBLIC_GAME_API_URL / anon key.
+      # Prefer committed .env.production over Actions vars. Stale GitHub vars
+      # (e.g. dead trycloudflare tunnels) previously overrode Supabase and broke Telegram login.
       - name: Resolve public env
         id: env
         shell: bash
@@ -77,24 +77,59 @@ jobs:
             source .env.production
             set +a
           fi
+          is_bad_url() {
+            local u="${1:-}"
+            [[ -z "$u" ]] && return 0
+            [[ "$u" == *"trycloudflare.com"* ]] && return 0
+            [[ "$u" == *"localhost"* ]] && return 0
+            [[ "$u" == *"127.0.0.1"* ]] && return 0
+            [[ "$u" == *"ngrok"* ]] && return 0
+            return 1
+          }
+          pick() {
+            # Prefer committed .env.production; only use Actions var if file empty and var is sane.
+            local from_file="${1:-}"
+            local from_var="${2:-}"
+            if [ -n "$from_file" ] && ! is_bad_url "$from_file"; then
+              echo "$from_file"
+            elif [ -n "$from_var" ] && ! is_bad_url "$from_var"; then
+              echo "$from_var"
+            else
+              echo "$from_file"
+            fi
+          }
           out() {
             local key="$1"
             local val="$2"
-            # Heredoc so JWT '=' padding cannot break GITHUB_OUTPUT.
             {
               echo "${key}<<EOF"
               echo "${val}"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
           }
-          out BOT_USERNAME "${VAR_BOT_USERNAME:-${NEXT_PUBLIC_TELEGRAM_BOT_USERNAME:-}}"
-          out DATA_SOURCE "${VAR_DATA_SOURCE:-${NEXT_PUBLIC_DATA_SOURCE:-api}}"
-          out SUPABASE_URL "${VAR_SUPABASE_URL:-${NEXT_PUBLIC_SUPABASE_URL:-}}"
-          out SUPABASE_ANON_KEY "${VAR_SUPABASE_ANON_KEY:-${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}}"
-          out SUPABASE_FUNCTION_NAME "${VAR_SUPABASE_FUNCTION_NAME:-${NEXT_PUBLIC_SUPABASE_FUNCTION_NAME:-bayhan-api}}"
-          out GAME_API_URL "${VAR_GAME_API_URL:-${NEXT_PUBLIC_GAME_API_URL:-}}"
-          test -n "${VAR_GAME_API_URL:-${NEXT_PUBLIC_GAME_API_URL:-}}"
-          test -n "${VAR_SUPABASE_ANON_KEY:-${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}}"
+          GAME_API_URL="$(pick "${NEXT_PUBLIC_GAME_API_URL:-}" "${VAR_GAME_API_URL:-}")"
+          SUPABASE_URL="$(pick "${NEXT_PUBLIC_SUPABASE_URL:-}" "${VAR_SUPABASE_URL:-}")"
+          SUPABASE_ANON_KEY="$(pick "${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}" "${VAR_SUPABASE_ANON_KEY:-}")"
+          out BOT_USERNAME "$(pick "${NEXT_PUBLIC_TELEGRAM_BOT_USERNAME:-}" "${VAR_BOT_USERNAME:-}")"
+          out DATA_SOURCE "$(pick "${NEXT_PUBLIC_DATA_SOURCE:-api}" "${VAR_DATA_SOURCE:-}")"
+          out SUPABASE_URL "$SUPABASE_URL"
+          out SUPABASE_ANON_KEY "$SUPABASE_ANON_KEY"
+          out SUPABASE_FUNCTION_NAME "$(pick "${NEXT_PUBLIC_SUPABASE_FUNCTION_NAME:-bayhan-api}" "${VAR_SUPABASE_FUNCTION_NAME:-}")"
+          out GAME_API_URL "$GAME_API_URL"
+          echo "Resolved GAME_API_URL host: $(echo "$GAME_API_URL" | sed -E 's#https?://([^/]+).*#\1#')"
+          test -n "$GAME_API_URL"
+          test -n "$SUPABASE_ANON_KEY"
+          if is_bad_url "$GAME_API_URL"; then
+            echo "::error::NEXT_PUBLIC_GAME_API_URL is missing or points at a tunnel/localhost: $GAME_API_URL"
+            exit 1
+          fi
+          case "$GAME_API_URL" in
+            *supabase.co/functions*) ;;
+            *)
+              echo "::error::NEXT_PUBLIC_GAME_API_URL must be a Supabase Edge Function URL, got: $GAME_API_URL"
+              exit 1
+              ;;
+          esac
 
       - name: Build static export
         run: npm run build
@@ -112,6 +147,7 @@ jobs:
         run: npm run verify:export
         env:
           NEXT_PUBLIC_BASE_PATH: ${{ steps.base.outputs.base_path }}
+          NEXT_PUBLIC_GAME_API_URL: ${{ steps.env.outputs.GAME_API_URL }}
 
       - name: Ensure .nojekyll
         run: |
