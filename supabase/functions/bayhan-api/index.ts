@@ -249,22 +249,36 @@ function routePath(pathname: string): string {
   return path;
 }
 
+function flightStartedMs(bet: Record<string, unknown>, round: Record<string, unknown>): number {
+  // Prefer round.started_at (set explicitly at bet time as ISO). Fall back to bet.created_at.
+  const candidates = [round.started_at, bet.created_at];
+  for (const raw of candidates) {
+    if (raw == null) continue;
+    const ms = Date.parse(String(raw));
+    if (Number.isFinite(ms)) return ms;
+  }
+  return Date.now();
+}
+
+function flightElapsedSec(bet: Record<string, unknown>, round: Record<string, unknown>): number {
+  return Math.max(0, (Date.now() - flightStartedMs(bet, round)) / 1000);
+}
+
 async function settleIfCrashed(
   client: SupabaseClient,
   bet: Record<string, unknown>,
   round: Record<string, unknown>,
-): Promise<{ crashed: boolean; crash_multiplier: number }> {
+): Promise<{ crashed: boolean; crash_multiplier: number; elapsed_sec: number; server_multiplier: number }> {
   const crashBp = Number(round.crash_multiplier_bp);
-  const startedRaw = bet.created_at
-    ? Date.parse(String(bet.created_at))
-    : round.started_at
-      ? Date.parse(String(round.started_at))
-      : Date.now();
-  const elapsedBp = growthBpFromElapsed((Date.now() - startedRaw) / 1000);
-  if (elapsedBp < crashBp) return { crashed: false, crash_multiplier: 0 };
+  const elapsedSec = flightElapsedSec(bet, round);
+  const elapsedBp = growthBpFromElapsed(elapsedSec);
+  const serverMult = Math.min(elapsedBp, crashBp) / 100;
+  if (elapsedBp < crashBp) {
+    return { crashed: false, crash_multiplier: 0, elapsed_sec: elapsedSec, server_multiplier: serverMult };
+  }
   await client.from(T.crash_bets).update({ status: "lost", settled_at: new Date().toISOString(), payout_usd: 0 }).eq("id", bet.id);
   await client.from(T.crash_rounds).update({ status: "crashed", crashed_at: new Date().toISOString() }).eq("id", round.id);
-  return { crashed: true, crash_multiplier: crashBp / 100 };
+  return { crashed: true, crash_multiplier: crashBp / 100, elapsed_sec: elapsedSec, server_multiplier: crashBp / 100 };
 }
 
 Deno.serve(async (req: Request) => {
@@ -398,12 +412,16 @@ Deno.serve(async (req: Request) => {
         .maybeSingle();
 
       let justCrashed: { crash_multiplier: number } | null = null;
+      let liveElapsed = 0;
+      let liveMult = 1;
       if (activeRow?.ma_crash_rounds) {
         const settled = await settleIfCrashed(
           client,
           activeRow as Record<string, unknown>,
           activeRow.ma_crash_rounds as Record<string, unknown>,
         );
+        liveElapsed = settled.elapsed_sec;
+        liveMult = settled.server_multiplier;
         if (settled.crashed) justCrashed = { crash_multiplier: settled.crash_multiplier };
       }
 
@@ -432,10 +450,13 @@ Deno.serve(async (req: Request) => {
               payout_usd: active.payout_usd,
               cashout_multiplier: active.cashout_multiplier_bp ? Number(active.cashout_multiplier_bp) / 100 : null,
               created_at: active.created_at,
+              elapsed_sec: liveElapsed,
+              server_multiplier: liveMult,
             }
           : null,
         just_crashed: justCrashed,
         growth_per_sec: CRASH_GROWTH_PER_SEC,
+        server_now_ms: Date.now(),
         history: (history ?? []).map((h) => ({
           public_id: h.public_id,
           crash_multiplier: Number(h.crash_multiplier_bp) / 100,
@@ -452,11 +473,16 @@ Deno.serve(async (req: Request) => {
       if (!Number.isFinite(stake) || stake < CRASH_MIN) return err("Stake outside allowed limits");
       const { data: existing } = await client.from(T.crash_bets).select("*, ma_crash_rounds(*)").eq("idempotency_key", body.idempotency_key).maybeSingle();
       if (existing) {
+        const exRound = (existing.ma_crash_rounds ?? {}) as Record<string, unknown>;
+        const elapsed = existing.status === "active" ? flightElapsedSec(existing as Record<string, unknown>, exRound) : 0;
         return json({
           id: existing.id, stake_usd: existing.stake_usd, status: existing.status, created_at: existing.created_at,
           cashout_multiplier: existing.cashout_multiplier_bp ? Number(existing.cashout_multiplier_bp) / 100 : null,
           payout_usd: existing.payout_usd,
-          round: mapRound((existing.ma_crash_rounds ?? {}) as Record<string, unknown>, false),
+          elapsed_sec: elapsed,
+          server_multiplier: growthBpFromElapsed(elapsed) / 100,
+          growth_per_sec: CRASH_GROWTH_PER_SEC,
+          round: mapRound(exRound, false),
         });
       }
       const { data: active } = await client.from(T.crash_bets).select("id").eq("user_id", user.id).eq("status", "active").maybeSingle();
@@ -492,6 +518,10 @@ Deno.serve(async (req: Request) => {
       return json({
         id: bet.id, stake_usd: bet.stake_usd, status: bet.status, created_at: bet.created_at,
         cashout_multiplier: null, payout_usd: 0,
+        // Client MUST start the visual clock at 1.00x from local now — do not Date.parse timestamps.
+        elapsed_sec: 0,
+        server_multiplier: 1,
+        growth_per_sec: CRASH_GROWTH_PER_SEC,
         round: mapRound(round as Record<string, unknown>, false),
       });
     }
@@ -510,13 +540,8 @@ Deno.serve(async (req: Request) => {
       if (!bet) return err("No active bet", 404);
       const round = bet.ma_crash_rounds as Record<string, unknown>;
       const crashBp = Number(round.crash_multiplier_bp);
-      // Flight clock starts at THIS bet, not an old shared round timestamp.
-      const startedRaw = bet.created_at
-        ? Date.parse(String(bet.created_at))
-        : round.started_at
-          ? Date.parse(String(round.started_at))
-          : Date.now();
-      const elapsed = Math.max(0, (Date.now() - startedRaw) / 1000);
+      // Flight clock starts at THIS round's started_at (set when the bet is placed).
+      const elapsed = flightElapsedSec(bet as Record<string, unknown>, round);
       let multBp = Math.min(growthBpFromElapsed(elapsed), crashBp);
       const clientMult = body.displayed_multiplier ?? body.multiplier;
       if (clientMult != null && Number.isFinite(Number(clientMult))) {

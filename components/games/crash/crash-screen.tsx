@@ -22,6 +22,9 @@ interface CrashState {
     payout_usd: number;
     cashout_multiplier: number | null;
     created_at?: string | null;
+    /** Server-authoritative age of this flight (seconds). */
+    elapsed_sec?: number;
+    server_multiplier?: number;
   } | null;
   just_crashed?: { crash_multiplier: number } | null;
   growth_per_sec?: number;
@@ -50,13 +53,22 @@ export function CrashScreen() {
   const [crashAt, setCrashAt] = useState<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pointsRef = useRef<Array<{ t: number; m: number }>>([]);
+  /** Local monotonic flight origin — NEVER derived from Date.parse(server timestamps). */
   const flightStartRef = useRef<number | null>(null);
+  const activeBetIdRef = useRef<number | null>(null);
   const growthRef = useRef(DEFAULT_GROWTH);
   const phaseRef = useRef(phase);
 
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+
+  const armFlightClock = useCallback((elapsedSec = 0) => {
+    const safeElapsed = Math.max(0, Math.min(elapsedSec, 3600));
+    flightStartRef.current = Date.now() - safeElapsed * 1000;
+    pointsRef.current = [{ t: safeElapsed, m: growthFromElapsed(safeElapsed, growthRef.current) }];
+    setMult(growthFromElapsed(safeElapsed, growthRef.current));
+  }, []);
 
   const load = useCallback(async () => {
     const data = await miniappFetch<CrashState>("/api/crash/state");
@@ -65,6 +77,7 @@ export function CrashScreen() {
 
     if (data.just_crashed) {
       flightStartRef.current = null;
+      activeBetIdRef.current = null;
       setCrashAt(data.just_crashed.crash_multiplier);
       setMult(data.just_crashed.crash_multiplier);
       setPhase("crashed");
@@ -73,16 +86,19 @@ export function CrashScreen() {
     }
 
     if (data.active_bet && data.round.status === "running") {
-      setPhase("flying");
-      if (flightStartRef.current == null) {
-        const fromBet = data.active_bet.created_at ? Date.parse(data.active_bet.created_at) : NaN;
-        flightStartRef.current = Number.isFinite(fromBet) ? fromBet : Date.now();
+      const betId = data.active_bet.id;
+      // New/resumed bet: sync from server elapsed_sec only (never raw created_at strings).
+      if (activeBetIdRef.current !== betId || flightStartRef.current == null) {
+        activeBetIdRef.current = betId;
+        armFlightClock(data.active_bet.elapsed_sec ?? 0);
       }
+      setPhase("flying");
     } else if (!data.active_bet && phaseRef.current === "flying") {
       flightStartRef.current = null;
+      activeBetIdRef.current = null;
       setPhase("idle");
     }
-  }, [refresh]);
+  }, [refresh, armFlightClock]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -96,7 +112,7 @@ export function CrashScreen() {
     if (phase !== "flying") return;
     const id = window.setInterval(() => {
       void load().catch(() => undefined);
-    }, 450);
+    }, 400);
     return () => window.clearInterval(id);
   }, [phase, load]);
 
@@ -104,10 +120,8 @@ export function CrashScreen() {
 
   useEffect(() => {
     if (!flying) return;
-    if (flightStartRef.current == null) flightStartRef.current = Date.now();
-    const start = flightStartRef.current;
-    pointsRef.current = [{ t: 0, m: 1 }];
-    const boot = window.setTimeout(() => setMult(1), 0);
+    if (flightStartRef.current == null) armFlightClock(0);
+    const start = flightStartRef.current!;
     const id = window.setInterval(() => {
       const elapsed = Math.max(0, (Date.now() - start) / 1000);
       const next = growthFromElapsed(elapsed, growthRef.current);
@@ -115,11 +129,8 @@ export function CrashScreen() {
       pointsRef.current.push({ t: elapsed, m: next });
       if (pointsRef.current.length > 280) pointsRef.current.shift();
     }, 32);
-    return () => {
-      window.clearTimeout(boot);
-      window.clearInterval(id);
-    };
-  }, [flying, state?.active_bet?.id]);
+    return () => window.clearInterval(id);
+  }, [flying, state?.active_bet?.id, armFlightClock]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -303,19 +314,22 @@ export function CrashScreen() {
       const bet = await miniappFetch<{
         id: number;
         created_at?: string;
+        elapsed_sec?: number;
+        growth_per_sec?: number;
         round: CrashState["round"];
       }>("/api/crash/bet", {
         method: "POST",
         body: JSON.stringify({ stake_usd: amount, idempotency_key: newIdempotencyKey() }),
       });
-      const fromBet = bet.created_at ? Date.parse(bet.created_at) : NaN;
-      flightStartRef.current = Number.isFinite(fromBet) ? fromBet : Date.now();
-      pointsRef.current = [{ t: 0, m: 1 }];
-      setMult(1);
+      if (bet.growth_per_sec && bet.growth_per_sec > 0) growthRef.current = bet.growth_per_sec;
+      // Always start at 1.00x on the device clock. Parsing server timestamps caused the ~50x jump.
+      activeBetIdRef.current = bet.id;
+      armFlightClock(0);
       setPhase("flying");
       await Promise.all([load(), refresh()]);
     } catch (e) {
       flightStartRef.current = null;
+      activeBetIdRef.current = null;
       setError(e instanceof Error ? e.message : "Bet failed");
       setPhase("idle");
     } finally {
@@ -344,6 +358,7 @@ export function CrashScreen() {
       if (res.cashout_multiplier != null) setMult(res.cashout_multiplier);
       setPhase(res.status === "won" ? "cashed" : "crashed");
       flightStartRef.current = null;
+      activeBetIdRef.current = null;
       await Promise.all([load(), refresh()]);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Cashout failed";
@@ -351,6 +366,7 @@ export function CrashScreen() {
       if (msg.toLowerCase().includes("crash")) {
         setPhase("crashed");
         flightStartRef.current = null;
+        activeBetIdRef.current = null;
       }
       await load().catch(() => undefined);
       await refresh();
