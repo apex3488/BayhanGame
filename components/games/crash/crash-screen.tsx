@@ -20,6 +20,7 @@ interface CrashState {
     status: string;
     payout_usd: number;
     cashout_multiplier: number | null;
+    created_at?: string | null;
   } | null;
   history: Array<{ public_id: string; crash_multiplier: number }>;
 }
@@ -28,8 +29,9 @@ function formatUsd(value: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
 }
 
+/** Same curve as server: 1.00x + 0.15x per second. */
 function growthFromElapsed(elapsedSec: number): number {
-  return Number((1 + elapsedSec * 0.15).toFixed(2));
+  return Number((1 + Math.max(0, elapsedSec) * 0.15).toFixed(2));
 }
 
 export function CrashScreen() {
@@ -43,12 +45,23 @@ export function CrashScreen() {
   const [lastPayout, setLastPayout] = useState<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pointsRef = useRef<Array<{ t: number; m: number }>>([]);
+  /** Local flight clock — never reuse a stale round.started_at from a previous round. */
+  const flightStartRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     const data = await miniappFetch<CrashState>("/api/crash/state");
     setState(data);
-    if (data.active_bet && data.round.status === "running") setPhase("flying");
-    else if (!data.active_bet) setPhase((p) => (p === "flying" ? "idle" : p));
+    if (data.active_bet && data.round.status === "running") {
+      setPhase("flying");
+      // Prefer bet.created_at (this stake), not an old round.started_at.
+      if (flightStartRef.current == null) {
+        const fromBet = data.active_bet.created_at ? Date.parse(data.active_bet.created_at) : NaN;
+        flightStartRef.current = Number.isFinite(fromBet) ? fromBet : Date.now();
+      }
+    } else if (!data.active_bet) {
+      flightStartRef.current = null;
+      setPhase((p) => (p === "flying" ? "idle" : p));
+    }
   }, []);
 
   useEffect(() => {
@@ -59,12 +72,13 @@ export function CrashScreen() {
   }, [load]);
 
   const flying = phase === "flying" && Boolean(state?.active_bet);
-  const startedAt = state?.round.started_at ? Date.parse(state.round.started_at) : 0;
 
   useEffect(() => {
     if (!flying) return;
-    const start = startedAt || Date.now();
+    if (flightStartRef.current == null) flightStartRef.current = Date.now();
+    const start = flightStartRef.current;
     pointsRef.current = [{ t: 0, m: 1 }];
+    setMult(1);
     const id = window.setInterval(() => {
       const elapsed = Math.max(0, (Date.now() - start) / 1000);
       const next = growthFromElapsed(elapsed);
@@ -73,7 +87,7 @@ export function CrashScreen() {
       if (pointsRef.current.length > 240) pointsRef.current.shift();
     }, 40);
     return () => window.clearInterval(id);
-  }, [flying, startedAt, state?.active_bet?.id]);
+  }, [flying, state?.active_bet?.id]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -93,7 +107,6 @@ export function CrashScreen() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
 
-      // grid
       ctx.strokeStyle = "rgba(255,255,255,0.04)";
       ctx.lineWidth = 1;
       for (let x = 0; x < w; x += 36) {
@@ -158,15 +171,22 @@ export function CrashScreen() {
     setError(null);
     setLastPayout(null);
     try {
-      await miniappFetch("/api/crash/bet", {
+      const bet = await miniappFetch<{
+        id: number;
+        created_at?: string;
+        round: CrashState["round"];
+      }>("/api/crash/bet", {
         method: "POST",
         body: JSON.stringify({ stake_usd: stake, idempotency_key: newIdempotencyKey() }),
       });
+      const fromBet = bet.created_at ? Date.parse(bet.created_at) : NaN;
+      flightStartRef.current = Number.isFinite(fromBet) ? fromBet : Date.now();
       pointsRef.current = [{ t: 0, m: 1 }];
       setMult(1);
       setPhase("flying");
       await Promise.all([load(), refresh()]);
     } catch (e) {
+      flightStartRef.current = null;
       setError(e instanceof Error ? e.message : "Bet failed");
       setPhase("idle");
     } finally {
@@ -192,11 +212,14 @@ export function CrashScreen() {
         },
       );
       setLastPayout(res.payout_usd);
+      if (res.cashout_multiplier != null) setMult(res.cashout_multiplier);
       setPhase(res.status === "won" ? "cashed" : "crashed");
+      flightStartRef.current = null;
       await Promise.all([load(), refresh()]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Cashout failed");
       setPhase("crashed");
+      flightStartRef.current = null;
       await load().catch(() => undefined);
       await refresh();
     } finally {

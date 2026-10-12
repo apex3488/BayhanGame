@@ -13,7 +13,8 @@ const BOOTSTRAP = Deno.env.get("MINIAPP_ADMIN_BOOTSTRAP_SECRET") ?? "";
 
 const cors: Record<string, string> = {
   "Access-Control-Allow-Origin": ORIGIN,
-  "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info, x-bayhan-token",
+  "Access-Control-Allow-Headers":
+    "authorization, apikey, content-type, x-client-info, x-bayhan-token, x-access-token, x-authorization",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
@@ -71,19 +72,39 @@ async function signToken(userId: number, isAdmin: boolean): Promise<string> {
     .setJti(crypto.randomUUID())
     .sign(await jwtSecretKey());
 }
-function extractSessionToken(req: Request): string | null {
-  // Prefer custom header so Supabase gateway Authorization can stay as anon JWT.
-  const custom = req.headers.get("x-bayhan-token");
-  if (custom) return custom.trim();
+function extractSessionToken(req: Request, url: URL, bodyToken?: string | null): string | null {
+  // Prefer custom headers so Supabase gateway Authorization can stay as anon JWT.
+  // Telegram WebViews may strip some headers — also accept query/body.
+  const candidates = [
+    req.headers.get("x-bayhan-token"),
+    req.headers.get("x-access-token"),
+    req.headers.get("x-authorization"),
+    url.searchParams.get("access_token"),
+    bodyToken,
+  ];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const value = raw.replace(/^Bearer\s+/i, "").trim();
+    if (value) return value;
+  }
   const auth = req.headers.get("authorization") ?? "";
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (!m) return null;
-  // Ignore Supabase anon/service JWTs (they have a "ref"/"role" claim style payload — we only accept our HS256 session).
+  // Ignore obvious Supabase anon JWTs (contain "role":"anon" in payload when decoded loosely).
+  try {
+    const mid = m[1].split(".")[1];
+    if (mid) {
+      const json = JSON.parse(atob(mid.replace(/-/g, "+").replace(/_/g, "/")));
+      if (json?.role === "anon" || json?.role === "service_role") return null;
+    }
+  } catch {
+    // not a JWT we can inspect — try verifying later
+  }
   return m[1].trim();
 }
 
-async function userFromAuth(req: Request): Promise<UserRow | Response> {
-  const token = extractSessionToken(req);
+async function userFromAuth(req: Request, url: URL, bodyToken?: string | null): Promise<UserRow | Response> {
+  const token = extractSessionToken(req, url, bodyToken);
   if (!token) return err("Unauthorized", 401);
   try {
     const { payload } = await jwtVerify(token, await jwtSecretKey(), { algorithms: ["HS256"] });
@@ -95,6 +116,16 @@ async function userFromAuth(req: Request): Promise<UserRow | Response> {
     return data as UserRow;
   } catch {
     return err("Unauthorized", 401);
+  }
+}
+
+async function readJsonBody(req: Request): Promise<Record<string, unknown> | null> {
+  try {
+    const data = await req.json();
+    if (data && typeof data === "object" && !Array.isArray(data)) return data as Record<string, unknown>;
+    return null;
+  } catch {
+    return null;
   }
 }
 function validateLogin(login: string): string | null {
@@ -265,7 +296,10 @@ Deno.serve(async (req: Request) => {
       return json({ access_token: await signToken(user.id, true), token_type: "bearer" });
     }
 
-    const authed = await userFromAuth(req);
+    // Read body once (Telegram may put access_token here).
+    const postBody = req.method === "POST" ? await readJsonBody(req) : null;
+    const bodyToken = typeof postBody?.access_token === "string" ? postBody.access_token : null;
+    const authed = await userFromAuth(req, url, bodyToken);
     if (authed instanceof Response) return authed;
     const user = authed;
     const client = db();
@@ -279,7 +313,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (req.method === "POST" && path === "/api/economy/transfer") {
-      const body = await req.json().catch(() => null) as { amount_usd?: number; direction?: string; idempotency_key?: string } | null;
+      const body = postBody as { amount_usd?: number; direction?: string; idempotency_key?: string } | null;
       if (!body?.idempotency_key || !body.amount_usd || !body.direction) return err("amount_usd, direction, idempotency_key required");
       const amount = Math.floor(Number(body.amount_usd));
       if (!Number.isFinite(amount) || amount <= 0) return err("Invalid amount");
@@ -316,7 +350,16 @@ Deno.serve(async (req: Request) => {
       const { data: history } = await client.from(T.crash_rounds).select("public_id,crash_multiplier_bp,status,crashed_at").in("status", ["crashed", "settled"]).order("id", { ascending: false }).limit(10);
       return json({
         round: mapRound(round as Record<string, unknown>, false),
-        active_bet: active,
+        active_bet: active
+          ? {
+              id: active.id,
+              stake_usd: active.stake_usd,
+              status: active.status,
+              payout_usd: active.payout_usd,
+              cashout_multiplier: active.cashout_multiplier_bp ? Number(active.cashout_multiplier_bp) / 100 : null,
+              created_at: active.created_at,
+            }
+          : null,
         history: (history ?? []).map((h) => ({
           public_id: h.public_id,
           crash_multiplier: Number(h.crash_multiplier_bp) / 100,
@@ -327,14 +370,14 @@ Deno.serve(async (req: Request) => {
     }
 
     if (req.method === "POST" && path === "/api/crash/bet") {
-      const body = await req.json().catch(() => null) as { stake_usd?: number; client_seed?: string; idempotency_key?: string } | null;
+      const body = postBody as { stake_usd?: number; client_seed?: string; idempotency_key?: string } | null;
       if (!body?.idempotency_key || body.stake_usd == null) return err("stake_usd and idempotency_key required");
       const stake = Math.floor(Number(body.stake_usd));
       if (stake < CRASH_MIN || stake > CRASH_MAX) return err("Stake outside allowed limits");
       const { data: existing } = await client.from(T.crash_bets).select("*, ma_crash_rounds(*)").eq("idempotency_key", body.idempotency_key).maybeSingle();
       if (existing) {
         return json({
-          id: existing.id, stake_usd: existing.stake_usd, status: existing.status,
+          id: existing.id, stake_usd: existing.stake_usd, status: existing.status, created_at: existing.created_at,
           cashout_multiplier: existing.cashout_multiplier_bp ? Number(existing.cashout_multiplier_bp) / 100 : null,
           payout_usd: existing.payout_usd,
           round: mapRound((existing.ma_crash_rounds ?? {}) as Record<string, unknown>, false),
@@ -344,28 +387,40 @@ Deno.serve(async (req: Request) => {
       if (active) return err("You already have an active Crash bet");
       const { data: fresh } = await client.from(T.users).select("*").eq("id", user.id).single();
       if (!fresh || fresh.wallet_usd < stake) return err("Insufficient wallet balance");
-      const round = await getOrCreateOpenRound(client, body.client_seed);
+      // Always open a fresh round for this stake so the flight clock starts at 1.00x.
+      const serverSeed = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+      const cseed = (body.client_seed || crypto.randomUUID().replace(/-/g, "").slice(0, 16)).slice(0, 64);
+      const startedAt = new Date().toISOString();
+      const { data: round, error: roundErr } = await client.from(T.crash_rounds).insert({
+        public_id: crypto.randomUUID(),
+        server_seed_hash: await sha256Hex(serverSeed),
+        server_seed: serverSeed,
+        client_seed: cseed,
+        nonce: 1,
+        crash_multiplier_bp: await crashMultiplierBp(serverSeed, cseed, 1),
+        status: "running",
+        started_at: startedAt,
+      }).select("*").single();
+      if (roundErr || !round) return err(roundErr?.message ?? "Round create failed", 500);
       const wallet = fresh.wallet_usd - stake;
       await client.from(T.users).update({ wallet_usd: wallet, updated_at: new Date().toISOString() }).eq("id", user.id);
       await client.from(T.transactions).insert({
         user_id: user.id, type: "CRASH_BET", amount_usd: -stake, wallet_after: wallet, bank_after: fresh.bank_usd,
         reason: `Crash stake round ${round.public_id}`, status: "completed", idempotency_key: `crash-bet:${body.idempotency_key}`,
       });
-      const startedAt = round.started_at ?? new Date().toISOString();
-      if (round.status === "open" || !round.started_at) {
-        await client.from(T.crash_rounds).update({ status: "running", started_at: startedAt }).eq("id", round.id);
-        round.status = "running";
-        round.started_at = startedAt;
-      }
       const { data: bet, error } = await client.from(T.crash_bets).insert({
         round_id: round.id, user_id: user.id, stake_usd: stake, status: "active", idempotency_key: body.idempotency_key,
       }).select("*").single();
       if (error) return err(error.message, 500);
-      return json({ id: bet.id, stake_usd: bet.stake_usd, status: bet.status, cashout_multiplier: null, payout_usd: 0, round: mapRound(round as Record<string, unknown>, false) });
+      return json({
+        id: bet.id, stake_usd: bet.stake_usd, status: bet.status, created_at: bet.created_at,
+        cashout_multiplier: null, payout_usd: 0,
+        round: mapRound(round as Record<string, unknown>, false),
+      });
     }
 
     if (req.method === "POST" && path === "/api/crash/cashout") {
-      const body = await req.json().catch(() => null) as {
+      const body = postBody as {
         multiplier?: number;
         displayed_multiplier?: number;
         bet_id?: number;
@@ -378,13 +433,16 @@ Deno.serve(async (req: Request) => {
       if (!bet) return err("No active bet", 404);
       const round = bet.ma_crash_rounds as Record<string, unknown>;
       const crashBp = Number(round.crash_multiplier_bp);
-      const startedRaw = round.started_at ? Date.parse(String(round.started_at)) : Date.now();
+      // Flight clock starts at THIS bet, not an old shared round timestamp.
+      const startedRaw = bet.created_at
+        ? Date.parse(String(bet.created_at))
+        : round.started_at
+          ? Date.parse(String(round.started_at))
+          : Date.now();
       const elapsed = Math.max(0, (Date.now() - startedRaw) / 1000);
-      // Server growth curve: 1.00x + 0.15x / sec (matches UI). Cap by crash point.
       let multBp = Math.min(100 + Math.floor(elapsed * 15), crashBp);
       const clientMult = body.displayed_multiplier ?? body.multiplier;
       if (clientMult != null && Number.isFinite(Number(clientMult))) {
-        // Never allow client to cash out above server-elapsed multiplier.
         multBp = Math.min(multBp, Math.round(Number(clientMult) * 100));
       }
       if (multBp < 101 || multBp >= crashBp) {
@@ -404,11 +462,12 @@ Deno.serve(async (req: Request) => {
       const { data: updated } = await client.from(T.crash_bets).update({
         status: "won", cashout_multiplier_bp: multBp, payout_usd: payout, settled_at: new Date().toISOString(),
       }).eq("id", bet.id).select("*").single();
+      await client.from(T.crash_rounds).update({ status: "settled", crashed_at: new Date().toISOString() }).eq("id", round.id);
       return json({ id: updated?.id ?? bet.id, stake_usd: bet.stake_usd, status: "won", cashout_multiplier: multBp / 100, payout_usd: payout, round: mapRound(round, false) });
     }
 
     if (req.method === "POST" && path === "/api/promos/redeem") {
-      const body = await req.json().catch(() => null) as { code?: string } | null;
+      const body = postBody as { code?: string } | null;
       const code = (body?.code ?? "").trim().toUpperCase();
       if (!code) return err("code required");
       const { data: promo } = await client.from(T.promo_codes).select("*").eq("code", code).eq("is_active", true).maybeSingle();

@@ -21,6 +21,21 @@ function isSupabaseFunction(url: string): boolean {
   return url.includes(".supabase.co/functions/");
 }
 
+/**
+ * Telegram WebViews sometimes drop uncommon headers. We send the session
+ * token in several places the Edge Function accepts.
+ */
+function applySessionToken(headers: Headers, url: URL, token: string | null, method: string) {
+  if (!token) return;
+  headers.set("X-Bayhan-Token", token);
+  headers.set("x-access-token", token);
+  // Some Android WebViews keep this even when custom X-* are stripped.
+  headers.set("X-Authorization", `Bearer ${token}`);
+  if (method === "GET" || method === "HEAD") {
+    url.searchParams.set("access_token", token);
+  }
+}
+
 export async function miniappFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
@@ -28,22 +43,41 @@ export async function miniappFetch<T>(path: string, init: RequestInit = {}): Pro
 
   const root = apiRoot();
   const token = getAccessToken();
+  const method = (init.method ?? "GET").toUpperCase();
+  const url = new URL(path.startsWith("http") ? path : `${root}${path.startsWith("/") ? path : `/${path}`}`);
 
   if (isSupabaseFunction(root) && env.supabaseAnonKey) {
-    // Gateway expects a Supabase anon JWT in Authorization / apikey.
-    // Our session JWT must NOT go there — it causes CORS-blocked 401s ("Network error").
+    // Gateway must see a Supabase anon JWT — custom session JWTs here cause CORS "Network error".
     headers.set("apikey", env.supabaseAnonKey);
     headers.set("Authorization", `Bearer ${env.supabaseAnonKey}`);
-    if (token) headers.set("X-Bayhan-Token", token);
+    applySessionToken(headers, url, token, method);
   } else if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
+  // For POST/PUT, also embed token in JSON body when possible (Telegram-safe).
+  let body = init.body;
+  if (token && body && typeof body === "string" && method !== "GET" && method !== "HEAD") {
+    try {
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && parsed.access_token == null) {
+        parsed.access_token = token;
+        body = JSON.stringify(parsed);
+      }
+    } catch {
+      // non-JSON body — leave as-is
+    }
+  }
+
   let response: Response;
   try {
-    response = await fetch(`${root}${path}`, { ...init, headers, credentials: "omit" });
-  } catch {
-    throw new MiniappApiError(0, "Network error");
+    response = await fetch(url.toString(), { ...init, method, headers, body, credentials: "omit" });
+  } catch (cause) {
+    const hint =
+      typeof cause === "object" && cause && "message" in cause
+        ? String((cause as { message: unknown }).message)
+        : "";
+    throw new MiniappApiError(0, hint.includes("Failed to fetch") || !hint ? "Network error" : hint);
   }
 
   if (response.status === 401) {
