@@ -7,7 +7,8 @@ const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const ORIGIN_FALLBACK = Deno.env.get("ALLOWED_ORIGIN") ?? "*";
 const STARTING = Number(Deno.env.get("MINIAPP_STARTING_BALANCE_USD") ?? "50000");
 const CRASH_MIN = Number(Deno.env.get("MINIAPP_CRASH_MIN_BET") ?? "1");
-const CRASH_MAX = Number(Deno.env.get("MINIAPP_CRASH_MAX_BET") ?? "10000");
+/** No hard max — stake is capped only by wallet balance. */
+
 /** Growth in multiplier per second (UI + settlement). ~0.06 → 2.00x ≈ 16.7s */
 const CRASH_GROWTH_PER_SEC = Number(Deno.env.get("MINIAPP_CRASH_GROWTH") ?? "0.06");
 const JWT_TTL = Number(Deno.env.get("MINIAPP_JWT_TTL_SECONDS") ?? String(60 * 60 * 24 * 7));
@@ -448,7 +449,7 @@ Deno.serve(async (req: Request) => {
       const body = postBody as { stake_usd?: number; client_seed?: string; idempotency_key?: string } | null;
       if (!body?.idempotency_key || body.stake_usd == null) return err("stake_usd and idempotency_key required");
       const stake = Math.floor(Number(body.stake_usd));
-      if (stake < CRASH_MIN || stake > CRASH_MAX) return err("Stake outside allowed limits");
+      if (!Number.isFinite(stake) || stake < CRASH_MIN) return err("Stake outside allowed limits");
       const { data: existing } = await client.from(T.crash_bets).select("*, ma_crash_rounds(*)").eq("idempotency_key", body.idempotency_key).maybeSingle();
       if (existing) {
         return json({
@@ -461,7 +462,8 @@ Deno.serve(async (req: Request) => {
       const { data: active } = await client.from(T.crash_bets).select("id").eq("user_id", user.id).eq("status", "active").maybeSingle();
       if (active) return err("You already have an active Crash bet");
       const { data: fresh } = await client.from(T.users).select("*").eq("id", user.id).single();
-      if (!fresh || fresh.wallet_usd < stake) return err("Insufficient wallet balance");
+      if (!fresh) return err("User not found", 404);
+      if (fresh.wallet_usd < stake) return err("Insufficient wallet balance");
       // Always open a fresh round for this stake so the flight clock starts at 1.00x.
       const serverSeed = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
       const cseed = (body.client_seed || crypto.randomUUID().replace(/-/g, "").slice(0, 16)).slice(0, 64);

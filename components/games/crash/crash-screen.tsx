@@ -288,6 +288,17 @@ export function CrashScreen() {
     setError(null);
     setLastPayout(null);
     setCrashAt(null);
+    const amount = Math.floor(stake);
+    if (!Number.isFinite(amount) || amount < 1) {
+      setError("Минимальная ставка $1");
+      setBusy(false);
+      return;
+    }
+    if (amount > wallet) {
+      setError("Ставка не может быть больше баланса");
+      setBusy(false);
+      return;
+    }
     try {
       const bet = await miniappFetch<{
         id: number;
@@ -295,7 +306,7 @@ export function CrashScreen() {
         round: CrashState["round"];
       }>("/api/crash/bet", {
         method: "POST",
-        body: JSON.stringify({ stake_usd: stake, idempotency_key: newIdempotencyKey() }),
+        body: JSON.stringify({ stake_usd: amount, idempotency_key: newIdempotencyKey() }),
       });
       const fromBet = bet.created_at ? Date.parse(bet.created_at) : NaN;
       flightStartRef.current = Number.isFinite(fromBet) ? fromBet : Date.now();
@@ -348,8 +359,14 @@ export function CrashScreen() {
     }
   }
 
+  const wallet = Math.max(0, Math.floor(user?.wallet_usd ?? 0));
   const potential = Math.floor((state?.active_bet?.stake_usd ?? stake) * mult);
-  const quick = [50, 100, 250, 500, 1000];
+  const quickBets = Array.from(
+    new Set([
+      ...[50, 100, 250, 500, 1000, 5000, 10_000, 25_000, 50_000].filter((v) => v <= wallet),
+      ...(wallet > 0 ? [wallet] : []),
+    ]),
+  );
 
   return (
     <div className="space-y-4">
@@ -407,29 +424,34 @@ export function CrashScreen() {
 
       <div className="rounded-[1.4rem] border border-white/10 bg-ink-950/70 p-4 backdrop-blur">
         <div className="mb-3 flex flex-wrap gap-2">
-          {quick.map((value) => (
+          {quickBets.slice(0, 8).map((value) => (
             <button
               key={value}
               type="button"
-              disabled={Boolean(state?.active_bet)}
+              disabled={Boolean(state?.active_bet) || value > wallet}
               onClick={() => setStake(value)}
               className={cn(
                 "rounded-full px-3 py-1.5 text-xs font-semibold transition",
                 stake === value ? "bg-brand-500 text-white" : "bg-white/5 text-mist-300 hover:bg-white/10",
+                value === wallet && wallet > 1000 && stake !== value && "border border-brand-400/40",
               )}
             >
-              {formatUsd(value)}
+              {value === wallet && wallet > 1000 ? `Всё · ${formatUsd(value)}` : formatUsd(value)}
             </button>
           ))}
         </div>
         <label className="block text-sm">
-          <span className="mb-1 block text-mist-300">Ставка</span>
+          <span className="mb-1 block text-mist-300">Ставка (лимит = баланс {formatUsd(wallet)})</span>
           <input
             type="number"
             min={1}
-            max={10000}
+            max={Math.max(wallet, 1)}
             value={stake}
-            onChange={(e) => setStake(Number(e.target.value))}
+            onChange={(e) => {
+              const next = Math.floor(Number(e.target.value));
+              if (!Number.isFinite(next)) return;
+              setStake(Math.max(1, Math.min(next, Math.max(wallet, 1))));
+            }}
             className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-lg font-semibold text-white outline-none focus:border-brand-400"
             disabled={Boolean(state?.active_bet)}
           />

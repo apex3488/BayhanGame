@@ -55,7 +55,8 @@ async def place_bet(
     idempotency_key: str,
 ) -> tuple[CrashRound, CrashBet]:
     settings = get_settings()
-    if stake_usd < settings.crash_min_bet or stake_usd > settings.crash_max_bet:
+    # No hard max — stake is capped only by wallet balance.
+    if stake_usd < settings.crash_min_bet:
         raise EconomyError("invalid_bet", "Stake outside allowed limits")
 
     existing = await session.scalar(
