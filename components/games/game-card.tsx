@@ -12,7 +12,14 @@ import { GameArt } from "./game-art";
 
 function StatusPill({ mode }: { mode: GameMode }) {
   const { t } = useI18n();
-  const label = mode.kind === "practice" ? t.games.practiceAvailable : mode.kind === "bot" ? t.games.botOnly : t.games.challenges;
+  const label =
+    mode.kind === "live"
+      ? "Live $"
+      : mode.kind === "practice"
+        ? t.games.practiceAvailable
+        : mode.kind === "bot"
+          ? t.games.botOnly
+          : t.games.challenges;
   return (
     <span
       className={cn(
@@ -61,7 +68,7 @@ export function GameCard({ mode }: { mode: GameMode }) {
         <div className="mt-auto pt-2.5">
           {mode.href ? (
             <ButtonLink href={mode.href} size="sm" icon={<Play className="size-3.5 fill-current" aria-hidden />}>
-              {mode.kind === "practice" ? t.games.practice : t.games.play}
+              {mode.kind === "practice" ? t.games.practice : mode.kind === "live" ? "Играть" : t.games.play}
             </ButtonLink>
           ) : (
             <Button

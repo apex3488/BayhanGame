@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { PageHeader } from "@/components/layout/page-header";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Rocket, Wallet, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { miniappFetch, newIdempotencyKey } from "@/lib/api/miniapp-client";
 import { useAuth } from "@/lib/auth/auth-provider";
+import { cn } from "@/lib/utils/cn";
 
 interface CrashState {
   round: {
@@ -28,6 +28,10 @@ function formatUsd(value: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
 }
 
+function growthFromElapsed(elapsedSec: number): number {
+  return Number((1 + elapsedSec * 0.15).toFixed(2));
+}
+
 export function CrashScreen() {
   const { user, refresh } = useAuth();
   const [state, setState] = useState<CrashState | null>(null);
@@ -35,10 +39,16 @@ export function CrashScreen() {
   const [mult, setMult] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<"idle" | "flying" | "cashed" | "crashed">("idle");
+  const [lastPayout, setLastPayout] = useState<number | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pointsRef = useRef<Array<{ t: number; m: number }>>([]);
 
   const load = useCallback(async () => {
     const data = await miniappFetch<CrashState>("/api/crash/state");
     setState(data);
+    if (data.active_bet && data.round.status === "running") setPhase("flying");
+    else if (!data.active_bet) setPhase((p) => (p === "flying" ? "idle" : p));
   }, []);
 
   useEffect(() => {
@@ -48,30 +58,117 @@ export function CrashScreen() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  const running =
-    Boolean(state?.round.started_at) && state?.round.status === "running" && Boolean(state.active_bet);
+  const flying = phase === "flying" && Boolean(state?.active_bet);
   const startedAt = state?.round.started_at ? Date.parse(state.round.started_at) : 0;
 
   useEffect(() => {
-    if (!running || !startedAt) return;
+    if (!flying) return;
+    const start = startedAt || Date.now();
+    pointsRef.current = [{ t: 0, m: 1 }];
     const id = window.setInterval(() => {
-      const elapsed = Math.max(0, (Date.now() - startedAt) / 1000);
-      setMult(Number((1 + elapsed * 0.15).toFixed(2)));
-    }, 50);
+      const elapsed = Math.max(0, (Date.now() - start) / 1000);
+      const next = growthFromElapsed(elapsed);
+      setMult(next);
+      pointsRef.current.push({ t: elapsed, m: next });
+      if (pointsRef.current.length > 240) pointsRef.current.shift();
+    }, 40);
     return () => window.clearInterval(id);
-  }, [running, startedAt]);
+  }, [flying, startedAt, state?.active_bet?.id]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let raf = 0;
+    const draw = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      // grid
+      ctx.strokeStyle = "rgba(255,255,255,0.04)";
+      ctx.lineWidth = 1;
+      for (let x = 0; x < w; x += 36) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      for (let y = 0; y < h; y += 28) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+
+      const pts = pointsRef.current;
+      const last = pts.length > 1 ? pts[pts.length - 1] : undefined;
+      if (last) {
+        const maxT = Math.max(last.t, 1);
+        const maxM = Math.max(last.m, 2);
+        const grad = ctx.createLinearGradient(0, h, w, 0);
+        grad.addColorStop(0, "#2563eb");
+        grad.addColorStop(1, phase === "crashed" ? "#ef4444" : "#93c5fd");
+        ctx.beginPath();
+        pts.forEach((p, i) => {
+          const x = (p.t / maxT) * (w - 24) + 12;
+          const y = h - 16 - ((p.m - 1) / (maxM - 1)) * (h - 36);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 3;
+        ctx.lineJoin = "round";
+        ctx.stroke();
+
+        const lx = (last.t / maxT) * (w - 24) + 12;
+        const ly = h - 16 - ((last.m - 1) / (maxM - 1)) * (h - 36);
+        ctx.beginPath();
+        ctx.arc(lx, ly, 6, 0, Math.PI * 2);
+        ctx.fillStyle = phase === "crashed" ? "#f87171" : "#fff";
+        ctx.fill();
+        ctx.shadowColor = phase === "crashed" ? "#ef4444" : "#3b82f6";
+        ctx.shadowBlur = 16;
+        ctx.beginPath();
+        ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      } else {
+        ctx.fillStyle = "rgba(148,163,184,0.45)";
+        ctx.font = "600 13px ui-sans-serif, system-ui";
+        ctx.fillText("Ожидание ставки…", 16, h / 2);
+      }
+
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [phase, mult]);
 
   async function placeBet() {
     setBusy(true);
     setError(null);
+    setLastPayout(null);
     try {
       await miniappFetch("/api/crash/bet", {
         method: "POST",
         body: JSON.stringify({ stake_usd: stake, idempotency_key: newIdempotencyKey() }),
       });
+      pointsRef.current = [{ t: 0, m: 1 }];
+      setMult(1);
+      setPhase("flying");
       await Promise.all([load(), refresh()]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Bet failed");
+      setPhase("idle");
     } finally {
       setBusy(false);
     }
@@ -82,95 +179,133 @@ export function CrashScreen() {
     setBusy(true);
     setError(null);
     try {
-      await miniappFetch("/api/crash/cashout", {
-        method: "POST",
-        body: JSON.stringify({
-          bet_id: state.active_bet.id,
-          displayed_multiplier: mult,
-          idempotency_key: newIdempotencyKey(),
-        }),
-      });
+      const res = await miniappFetch<{ payout_usd: number; cashout_multiplier: number | null; status: string }>(
+        "/api/crash/cashout",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            bet_id: state.active_bet.id,
+            displayed_multiplier: mult,
+            multiplier: mult,
+            idempotency_key: newIdempotencyKey(),
+          }),
+        },
+      );
+      setLastPayout(res.payout_usd);
+      setPhase(res.status === "won" ? "cashed" : "crashed");
       await Promise.all([load(), refresh()]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Cashout failed");
+      setPhase("crashed");
+      await load().catch(() => undefined);
+      await refresh();
     } finally {
       setBusy(false);
     }
   }
 
-  const potential = Math.floor(stake * mult);
+  const potential = Math.floor((state?.active_bet?.stake_usd ?? stake) * mult);
+  const quick = [50, 100, 250, 500, 1000];
 
   return (
-    <div className="space-y-5">
-      <PageHeader title="Crash" subtitle="Серверный коэффициент · cash out до краша" />
-      <Card className="relative overflow-hidden border-brand-400/20 bg-gradient-to-b from-[#0B1220] to-[#05070B] p-5">
-        <div className="pointer-events-none absolute -top-20 right-0 size-56 rounded-full bg-brand-500/20 blur-3xl" />
-        <div className="relative flex items-end justify-between gap-4">
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-xs tracking-[0.2em] text-brand-200 uppercase">Live · Crash</p>
+          <h1 className="mt-1 text-2xl font-bold tracking-tight text-white">Успей забрать до краша</h1>
+        </div>
+        <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-mist-200">
+          <Wallet className="size-3.5 text-brand-300" />
+          {formatUsd(user?.wallet_usd ?? 0)}
+        </div>
+      </div>
+
+      <div className="relative overflow-hidden rounded-[1.6rem] border border-white/10 bg-[#070b14]">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_0%,rgba(37,99,235,0.35),transparent_45%),radial-gradient(circle_at_90%_20%,rgba(239,68,68,0.12),transparent_40%)]" />
+        <div className="relative flex items-center justify-between px-5 pt-5">
           <div>
-            <p className="text-xs tracking-[0.2em] text-mist-400 uppercase">Multiplier</p>
-            <p className="mt-1 text-5xl font-bold tracking-tight text-white tabular-nums">{mult.toFixed(2)}x</p>
-            <p className="mt-2 text-sm text-mist-300">
-              Баланс: <span className="font-semibold text-white">{formatUsd(user?.wallet_usd ?? 0)}</span>
+            <p
+              className={cn(
+                "text-6xl font-black tracking-tight tabular-nums sm:text-7xl",
+                phase === "crashed" ? "text-red-400" : phase === "cashed" ? "text-emerald-300" : "text-white",
+              )}
+            >
+              {mult.toFixed(2)}
+              <span className="text-3xl text-mist-400">x</span>
+            </p>
+            <p className="mt-1 text-sm text-mist-400">
+              {phase === "flying" && "Полёт…"}
+              {phase === "idle" && "Сделайте ставку"}
+              {phase === "cashed" && lastPayout != null && `Забрано ${formatUsd(lastPayout)}`}
+              {phase === "crashed" && "Краш!"}
             </p>
           </div>
-          <div className="text-right text-xs text-mist-500">
-            <p>Round</p>
-            <p className="max-w-[10rem] truncate font-mono text-mist-300">{state?.round.public_id ?? "—"}</p>
+          <div className="hidden text-right sm:block">
+            <p className="text-[11px] tracking-wide text-mist-500 uppercase">Round</p>
+            <p className="max-w-[9rem] truncate font-mono text-xs text-mist-300">{state?.round.public_id ?? "—"}</p>
           </div>
         </div>
-        <div className="relative mt-6 h-28 overflow-hidden rounded-2xl border border-white/10 bg-black/30">
-          <div
-            className="absolute bottom-0 left-0 h-1 rounded-full bg-gradient-to-r from-brand-400 to-white transition-all duration-75"
-            style={{ width: `${Math.min(96, (mult - 1) * 18)}%` }}
-          />
-          <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px)] bg-size-[100%_18px]" />
+        <canvas ref={canvasRef} className="relative mt-2 h-52 w-full sm:h-64" />
+        <div className="relative flex flex-wrap gap-2 px-4 pb-4">
+          {(state?.history ?? []).slice(0, 8).map((item) => (
+            <span
+              key={item.public_id}
+              className={cn(
+                "rounded-full px-2.5 py-1 text-xs font-semibold",
+                item.crash_multiplier >= 2 ? "bg-brand-500/20 text-brand-100" : "bg-white/5 text-mist-300",
+              )}
+            >
+              {item.crash_multiplier.toFixed(2)}x
+            </span>
+          ))}
         </div>
-      </Card>
+      </div>
 
-      <Card className="space-y-3 p-4">
+      <div className="rounded-[1.4rem] border border-white/10 bg-ink-950/70 p-4 backdrop-blur">
+        <div className="mb-3 flex flex-wrap gap-2">
+          {quick.map((value) => (
+            <button
+              key={value}
+              type="button"
+              disabled={Boolean(state?.active_bet)}
+              onClick={() => setStake(value)}
+              className={cn(
+                "rounded-full px-3 py-1.5 text-xs font-semibold transition",
+                stake === value ? "bg-brand-500 text-white" : "bg-white/5 text-mist-300 hover:bg-white/10",
+              )}
+            >
+              {formatUsd(value)}
+            </button>
+          ))}
+        </div>
         <label className="block text-sm">
-          <span className="mb-1 block text-mist-300">Ставка (USD)</span>
+          <span className="mb-1 block text-mist-300">Ставка</span>
           <input
             type="number"
             min={1}
             max={10000}
             value={stake}
             onChange={(e) => setStake(Number(e.target.value))}
-            className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-white outline-none focus:border-brand-400"
+            className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-3 text-lg font-semibold text-white outline-none focus:border-brand-400"
             disabled={Boolean(state?.active_bet)}
           />
         </label>
-        <p className="text-sm text-mist-300">
+        <p className="mt-2 text-sm text-mist-300">
           Потенциал: <span className="font-semibold text-white">{formatUsd(potential)}</span>
         </p>
-        {error && <p className="text-sm text-red-300">{error}</p>}
-        {!state?.active_bet ? (
-          <Button block loading={busy} onClick={placeBet}>
-            Поставить
-          </Button>
-        ) : (
-          <Button block loading={busy} onClick={cashout}>
-            Забрать {formatUsd(Math.floor(state.active_bet.stake_usd * mult))}
-          </Button>
-        )}
-      </Card>
-
-      <Card className="p-4">
-        <p className="mb-3 text-sm font-semibold text-white">Последние раунды</p>
-        <div className="flex flex-wrap gap-2">
-          {(state?.history ?? []).map((item) => (
-            <span
-              key={item.public_id}
-              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                item.crash_multiplier >= 2 ? "bg-brand-500/20 text-brand-100" : "bg-white/5 text-mist-300"
-              }`}
-            >
-              {item.crash_multiplier.toFixed(2)}x
-            </span>
-          ))}
-          {!state?.history?.length && <span className="text-sm text-mist-500">Пока пусто</span>}
+        {error && <p className="mt-2 text-sm text-red-300">{error}</p>}
+        <div className="mt-4">
+          {!state?.active_bet ? (
+            <Button block loading={busy} onClick={placeBet} icon={<Rocket className="size-4" />}>
+              Поставить {formatUsd(stake)}
+            </Button>
+          ) : (
+            <Button block loading={busy} onClick={cashout} icon={<Zap className="size-4" />}>
+              Забрать {formatUsd(potential)}
+            </Button>
+          )}
         </div>
-      </Card>
+      </div>
     </div>
   );
 }

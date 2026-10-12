@@ -7,6 +7,7 @@ import {
   Dices,
   Disc3,
   Goal,
+  Rocket,
   Spade,
   Target,
   TrendingUp,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 
 export type GameModeId =
+  | "crash"
   | "mines"
   | "updown"
   | "slots"
@@ -26,7 +28,7 @@ export type GameModeId =
   | "bowling"
   | "trade";
 
-export type GameModeKind = "practice" | "challenge" | "bot";
+export type GameModeKind = "live" | "practice" | "challenge" | "bot";
 
 export interface GameMode {
   id: GameModeId;
@@ -36,8 +38,9 @@ export interface GameMode {
   href: string | null;
 }
 
-/** Modes that exist in the Python bot (bot/constants.py GAME_*). */
+/** Modes that exist in the Python bot (bot/constants.py GAME_*) + Mini App live Crash. */
 export const GAME_MODES: readonly GameMode[] = [
+  { id: "crash", kind: "live", icon: Rocket, href: "/games/crash" },
   { id: "mines", kind: "practice", icon: Bomb, href: "/games/mines" },
   { id: "updown", kind: "practice", icon: ChartCandlestick, href: "/games/updown" },
   { id: "slots", kind: "practice", icon: Cherry, href: "/games/slots" },

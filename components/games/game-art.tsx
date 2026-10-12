@@ -54,7 +54,20 @@ export function GameArt({ mode, className }: { mode: GameMode; className?: strin
           ))}
         </div>
       )}
-      {mode.id !== "mines" && mode.id !== "updown" && mode.id !== "slots" && (
+      {mode.id === "crash" && (
+        <svg viewBox="0 0 100 56" className="h-[70%] w-[85%]">
+          <defs>
+            <linearGradient id="crash-line" x1="0" x2="1" y1="1" y2="0">
+              <stop offset="0" stopColor="#2563eb" />
+              <stop offset="1" stopColor="#93c5fd" />
+            </linearGradient>
+          </defs>
+          <path d="M6 48 C28 46, 40 34, 52 24 S78 8, 88 6" fill="none" stroke="url(#crash-line)" strokeWidth="3.2" strokeLinecap="round" />
+          <circle cx="88" cy="6" r="4" fill="#fff" />
+          <path d="M88 6 L96 2 L92 12 Z" fill="#ef4444" />
+        </svg>
+      )}
+      {mode.id !== "mines" && mode.id !== "updown" && mode.id !== "slots" && mode.id !== "crash" && (
         <span className="relative grid size-12 place-items-center rounded-full border border-brand-300/40 bg-brand-500/20">
           <span className="absolute inset-[-8px] rounded-full border border-brand-400/15" />
           <Icon className="size-6 text-white" />

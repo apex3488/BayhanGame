@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { ArrowLeftRight, Landmark, Rocket, Ticket, Wallet } from "lucide-react";
-import { PageHeader } from "@/components/layout/page-header";
+import { Avatar } from "@/components/ui/avatar";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { miniappFetch, newIdempotencyKey } from "@/lib/api/miniapp-client";
 import { useAuth } from "@/lib/auth/auth-provider";
-import { useEffect, useState } from "react";
 
 function money(n: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
@@ -38,29 +38,37 @@ export function AccountHome() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={`Привет, ${user.display_name}`}
-        subtitle={`@${user.login} · уровень ${user.level}`}
-        actions={
+      <div className="relative overflow-hidden rounded-[1.5rem] border border-white/10 bg-[radial-gradient(120%_80%_at_50%_-10%,rgba(59,130,246,0.35),transparent_55%),linear-gradient(180deg,#0f1a30,#080c15)]">
+        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-size-[22px_22px]" />
+        <div className="relative flex items-center gap-4 px-5 py-5">
+          <Avatar name={user.display_name} photoUrl={null} size={64} />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs tracking-[0.18em] text-brand-200 uppercase">BAYHAN GAME</p>
+            <h1 className="mt-1 truncate text-2xl font-bold tracking-tight text-white">Привет, {user.display_name}</h1>
+            <p className="mt-1 text-sm text-mist-300">
+              @{user.login} · уровень {user.level}
+              {user.is_admin ? " · Admin" : ""}
+            </p>
+          </div>
           <Button size="sm" variant="secondary" onClick={logout}>
             Выход
           </Button>
-        }
-      />
+        </div>
+      </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <Card className="overflow-hidden border-brand-400/20 p-5">
+        <div className="surface flex flex-col gap-2 p-4">
           <div className="flex items-center gap-2 text-mist-300">
             <Wallet className="size-4 text-brand-300" /> Кошелёк
           </div>
-          <p className="mt-2 text-4xl font-bold tracking-tight text-white">{money(user.wallet_usd)}</p>
-        </Card>
-        <Card className="p-5">
+          <p className="text-3xl font-bold tracking-tight text-white tabular-nums">{money(user.wallet_usd)}</p>
+        </div>
+        <div className="surface flex flex-col gap-2 p-4">
           <div className="flex items-center gap-2 text-mist-300">
             <Landmark className="size-4 text-brand-300" /> Банк
           </div>
-          <p className="mt-2 text-4xl font-bold tracking-tight text-white">{money(user.bank_usd)}</p>
-        </Card>
+          <p className="text-3xl font-bold tracking-tight text-white tabular-nums">{money(user.bank_usd)}</p>
+        </div>
       </div>
 
       <Card className="relative overflow-hidden border-brand-400/30 p-5">
@@ -91,16 +99,20 @@ export function AccountHome() {
             variant="secondary"
             icon={<ArrowLeftRight className="size-4" />}
             onClick={async () => {
-              await miniappFetch("/api/economy/transfer", {
-                method: "POST",
-                body: JSON.stringify({
-                  amount_usd: amount,
-                  direction: "to_bank",
-                  idempotency_key: newIdempotencyKey(),
-                }),
-              });
-              await refresh();
-              setMsg("Переведено в банк");
+              try {
+                await miniappFetch("/api/economy/transfer", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    amount_usd: amount,
+                    direction: "to_bank",
+                    idempotency_key: newIdempotencyKey(),
+                  }),
+                });
+                await refresh();
+                setMsg("Переведено в банк");
+              } catch (e) {
+                setMsg(e instanceof Error ? e.message : "Ошибка перевода");
+              }
             }}
           >
             В банк
@@ -108,16 +120,20 @@ export function AccountHome() {
           <Button
             variant="secondary"
             onClick={async () => {
-              await miniappFetch("/api/economy/transfer", {
-                method: "POST",
-                body: JSON.stringify({
-                  amount_usd: amount,
-                  direction: "to_wallet",
-                  idempotency_key: newIdempotencyKey(),
-                }),
-              });
-              await refresh();
-              setMsg("Переведено в кошелёк");
+              try {
+                await miniappFetch("/api/economy/transfer", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    amount_usd: amount,
+                    direction: "to_wallet",
+                    idempotency_key: newIdempotencyKey(),
+                  }),
+                });
+                await refresh();
+                setMsg("Переведено в кошелёк");
+              } catch (e) {
+                setMsg(e instanceof Error ? e.message : "Ошибка перевода");
+              }
             }}
           >
             В кошелёк

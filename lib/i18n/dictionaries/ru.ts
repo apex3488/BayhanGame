@@ -129,6 +129,7 @@ const ru = {
     youWon: "Выигрыш {amount}",
     youLost: "Ставка проиграна",
     modes: {
+      crash: { name: "Crash", description: "Ставка на рост множителя. Заберите выигрыш до краша — на реальный баланс." },
       mines: { name: "Mines", description: "Поле 5×5. Открывайте клетки и забирайте выигрыш до мины." },
       updown: { name: "Up / Down", description: "Угадайте направление курса за 5 секунд. Выплата ×1.9." },
       slots: { name: "Slots", description: "Три барабана, шесть символов и множитель до ×100." },

@@ -13,7 +13,7 @@ const BOOTSTRAP = Deno.env.get("MINIAPP_ADMIN_BOOTSTRAP_SECRET") ?? "";
 
 const cors: Record<string, string> = {
   "Access-Control-Allow-Origin": ORIGIN,
-  "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
+  "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info, x-bayhan-token",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
@@ -71,12 +71,24 @@ async function signToken(userId: number, isAdmin: boolean): Promise<string> {
     .setJti(crypto.randomUUID())
     .sign(await jwtSecretKey());
 }
+function extractSessionToken(req: Request): string | null {
+  // Prefer custom header so Supabase gateway Authorization can stay as anon JWT.
+  const custom = req.headers.get("x-bayhan-token");
+  if (custom) return custom.trim();
+  const auth = req.headers.get("authorization") ?? "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m) return null;
+  // Ignore Supabase anon/service JWTs (they have a "ref"/"role" claim style payload — we only accept our HS256 session).
+  return m[1].trim();
+}
+
 async function userFromAuth(req: Request): Promise<UserRow | Response> {
-  const m = (req.headers.get("authorization") ?? "").match(/^Bearer\s+(.+)$/i);
-  if (!m) return err("Unauthorized", 401);
+  const token = extractSessionToken(req);
+  if (!token) return err("Unauthorized", 401);
   try {
-    const { payload } = await jwtVerify(m[1], await jwtSecretKey(), { algorithms: ["HS256"] });
+    const { payload } = await jwtVerify(token, await jwtSecretKey(), { algorithms: ["HS256"] });
     const id = Number(payload.sub);
+    if (!Number.isFinite(id)) return err("Unauthorized", 401);
     const { data, error } = await db().from(T.users).select("*").eq("id", id).maybeSingle();
     if (error || !data) return err("Unauthorized", 401);
     if ((data as UserRow).is_banned) return err("Account banned", 403);
@@ -133,6 +145,17 @@ async function writeAudit(client: SupabaseClient, actor: number | null, action: 
 async function getOrCreateOpenRound(client: SupabaseClient, clientSeed?: string) {
   const { data: open } = await client.from(T.crash_rounds).select("*").eq("status", "open").order("id", { ascending: false }).limit(1).maybeSingle();
   if (open) return open;
+
+  const { data: running } = await client.from(T.crash_rounds).select("*").eq("status", "running").order("id", { ascending: false }).limit(1).maybeSingle();
+  if (running) {
+    const crashBp = Number(running.crash_multiplier_bp);
+    const started = running.started_at ? Date.parse(String(running.started_at)) : Date.now();
+    const elapsedBp = 100 + Math.floor(Math.max(0, (Date.now() - started) / 1000) * 15);
+    if (elapsedBp < crashBp) return running;
+    await client.from(T.crash_rounds).update({ status: "crashed", crashed_at: new Date().toISOString() }).eq("id", running.id);
+    await client.from(T.crash_bets).update({ status: "lost", settled_at: new Date().toISOString(), payout_usd: 0 }).eq("round_id", running.id).eq("status", "active");
+  }
+
   const serverSeed = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   const cseed = (clientSeed || crypto.randomUUID().replace(/-/g, "").slice(0, 16)).slice(0, 64);
   const { data, error } = await client.from(T.crash_rounds).insert({
@@ -328,9 +351,11 @@ Deno.serve(async (req: Request) => {
         user_id: user.id, type: "CRASH_BET", amount_usd: -stake, wallet_after: wallet, bank_after: fresh.bank_usd,
         reason: `Crash stake round ${round.public_id}`, status: "completed", idempotency_key: `crash-bet:${body.idempotency_key}`,
       });
-      if (round.status === "open") {
-        await client.from(T.crash_rounds).update({ status: "running", started_at: new Date().toISOString() }).eq("id", round.id);
+      const startedAt = round.started_at ?? new Date().toISOString();
+      if (round.status === "open" || !round.started_at) {
+        await client.from(T.crash_rounds).update({ status: "running", started_at: startedAt }).eq("id", round.id);
         round.status = "running";
+        round.started_at = startedAt;
       }
       const { data: bet, error } = await client.from(T.crash_bets).insert({
         round_id: round.id, user_id: user.id, stake_usd: stake, status: "active", idempotency_key: body.idempotency_key,
@@ -340,17 +365,31 @@ Deno.serve(async (req: Request) => {
     }
 
     if (req.method === "POST" && path === "/api/crash/cashout") {
-      const body = await req.json().catch(() => null) as { multiplier?: number; idempotency_key?: string } | null;
-      if (!body?.idempotency_key || body.multiplier == null) return err("multiplier and idempotency_key required");
-      const multBp = Math.round(Number(body.multiplier) * 100);
-      if (!Number.isFinite(multBp) || multBp < 101) return err("Invalid multiplier");
-      const { data: bet } = await client.from(T.crash_bets).select("*, ma_crash_rounds(*)").eq("user_id", user.id).eq("status", "active").maybeSingle();
+      const body = await req.json().catch(() => null) as {
+        multiplier?: number;
+        displayed_multiplier?: number;
+        bet_id?: number;
+        idempotency_key?: string;
+      } | null;
+      if (!body?.idempotency_key) return err("idempotency_key required");
+      let betQuery = client.from(T.crash_bets).select("*, ma_crash_rounds(*)").eq("user_id", user.id).eq("status", "active");
+      if (body.bet_id != null) betQuery = betQuery.eq("id", body.bet_id);
+      const { data: bet } = await betQuery.maybeSingle();
       if (!bet) return err("No active bet", 404);
       const round = bet.ma_crash_rounds as Record<string, unknown>;
       const crashBp = Number(round.crash_multiplier_bp);
-      if (multBp >= crashBp) {
+      const startedRaw = round.started_at ? Date.parse(String(round.started_at)) : Date.now();
+      const elapsed = Math.max(0, (Date.now() - startedRaw) / 1000);
+      // Server growth curve: 1.00x + 0.15x / sec (matches UI). Cap by crash point.
+      let multBp = Math.min(100 + Math.floor(elapsed * 15), crashBp);
+      const clientMult = body.displayed_multiplier ?? body.multiplier;
+      if (clientMult != null && Number.isFinite(Number(clientMult))) {
+        // Never allow client to cash out above server-elapsed multiplier.
+        multBp = Math.min(multBp, Math.round(Number(clientMult) * 100));
+      }
+      if (multBp < 101 || multBp >= crashBp) {
         await client.from(T.crash_bets).update({ status: "lost", settled_at: new Date().toISOString(), payout_usd: 0 }).eq("id", bet.id);
-        await client.from(T.crash_rounds).update({ status: "crashed", crashed_at: new Date().toISOString(), server_seed: round.server_seed }).eq("id", round.id);
+        await client.from(T.crash_rounds).update({ status: "crashed", crashed_at: new Date().toISOString() }).eq("id", round.id);
         return err("Crashed before cash out");
       }
       const payout = Math.floor((bet.stake_usd * multBp) / 100);

@@ -1,60 +1,36 @@
 "use client";
 
-import { useMemo } from "react";
 import Link from "next/link";
-import { ChevronRight, ListChecks, PackageOpen, Settings } from "lucide-react";
-import { ConnectionBanner } from "@/components/layout/connection-banner";
-import { DemoNotice } from "@/components/layout/demo-notice";
+import { ChevronRight, ListChecks, Settings, Shield } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
-import { useGameApi } from "@/lib/state/game-api-context";
-import { ButtonLink } from "@/components/ui/button";
-import { Card, Section } from "@/components/ui/card";
-import { EmptyState, ErrorState, Skeleton } from "@/components/ui/feedback";
-import { ItemPreview } from "@/components/store/item-visuals";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { ProgressBar } from "@/components/ui/progress-bar";
+import { Avatar } from "@/components/ui/avatar";
+import { useAuth } from "@/lib/auth/auth-provider";
 import { useFormat } from "@/lib/hooks/use-format";
 import { useI18n } from "@/lib/i18n/i18n-provider";
-import { useLeaderboard } from "@/lib/services/leaderboard-service";
-import { usePlayer } from "@/lib/services/player-service";
-import { loadoutPreviews, useCatalog, useInventory } from "@/lib/services/store-service";
-import { LoadoutPanel } from "./loadout-panel";
-import { ProfileIdentity } from "./profile-identity";
-import { BalanceStats, GameStats, XpCard } from "./profile-stats";
+import { Landmark, Wallet } from "lucide-react";
 
-function ProfileSkeleton() {
-  return (
-    <div className="space-y-4">
-      <Skeleton className="h-64 rounded-[1.5rem]" />
-      <Skeleton className="h-24 rounded-[var(--radius-card)]" />
-      <div className="grid grid-cols-3 gap-2.5">
-        <Skeleton className="h-24 rounded-[var(--radius-card)]" />
-        <Skeleton className="h-24 rounded-[var(--radius-card)]" />
-        <Skeleton className="h-24 rounded-[var(--radius-card)]" />
-      </div>
-    </div>
-  );
+function money(n: number): string {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
 }
 
 export function ProfileScreen() {
   const { t, format } = useI18n();
   const fmt = useFormat();
-  const { isUnavailable } = useGameApi();
-  const player = usePlayer();
-  const catalog = useCatalog();
-  const inventory = useInventory();
-  const board = useLeaderboard("capital", 10);
+  const { user, logout } = useAuth();
 
-  const lookup = useMemo(() => new Map((catalog.data ?? []).map((item) => [item.id, item])), [catalog.data]);
-  const ownedItems = useMemo(
-    () => (inventory.data ?? []).map((entry) => lookup.get(entry.itemId)).filter((item) => item !== undefined),
-    [inventory.data, lookup],
-  );
+  if (!user) return null;
 
-  const data = player.data;
+  const xpNext = user.level * 1000;
+  const memberSince = user.created_at ? fmt.date(user.created_at) : null;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         title={t.profile.title}
+        subtitle={`@${user.login}`}
         actions={
           <Link
             href="/settings"
@@ -65,77 +41,52 @@ export function ProfileScreen() {
           </Link>
         }
       />
-      <DemoNotice />
-      <ConnectionBanner />
 
-      {!isUnavailable &&
-        (!data ? (
-          player.status === "error" ? <ErrorState error={player.error} onRetry={player.reload} /> : <ProfileSkeleton />
-        ) : (
-          <>
-            <div className="grid gap-4 md:grid-cols-[1.1fr_1fr] md:items-start">
-              <ProfileIdentity
-                className="animate-fade-up"
-                name={data.nickname}
-                photoUrl={data.photoUrl}
-                level={data.level}
-                previews={loadoutPreviews(data.loadout, lookup)}
-                subtitle={data.registeredAt ? format(t.profile.memberSince, { date: fmt.date(data.registeredAt) }) : undefined}
-              />
-              <div className="space-y-4">
-                <XpCard player={data} />
-                <BalanceStats player={data} />
-              </div>
-            </div>
+      <div className="relative overflow-hidden rounded-[1.5rem] border border-white/10 bg-[radial-gradient(120%_80%_at_50%_-10%,rgba(59,130,246,0.35),transparent_55%),linear-gradient(180deg,#0f1a30,#080c15)]">
+        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-size-[22px_22px]" />
+        <div className="relative flex flex-col items-center px-5 pt-8 pb-6 text-center">
+          <Avatar name={user.display_name} photoUrl={null} size={96} />
+          <p className="mt-5 text-[22px] font-bold tracking-[-0.02em] text-white">{user.display_name}</p>
+          <span className="mt-2 inline-flex h-6 items-center rounded-full border border-brand-400/30 bg-brand-500/15 px-2.5 text-[12px] font-semibold text-brand-100">
+            {t.common.level} {user.level}
+            {user.is_admin ? " · Admin" : ""}
+          </span>
+          {memberSince && (
+            <p className="mt-2 text-[12px] text-mist-300">{format(t.profile.memberSince, { date: memberSince })}</p>
+          )}
+        </div>
+      </div>
 
-            <Section id="profile-stats" title={t.profile.stats}>
-              <GameStats player={data} rank={board.data?.me?.rank ?? null} />
-            </Section>
+      <Card className="p-4">
+        <div className="flex items-baseline justify-between">
+          <span className="text-sm font-semibold text-white">
+            {t.common.level} {user.level}
+          </span>
+          <span className="tabular text-[12px] text-mist-300">
+            {format(t.profile.xpProgress, { xp: fmt.number(user.xp), next: fmt.number(xpNext) })}
+          </span>
+        </div>
+        <ProgressBar className="mt-3" value={user.xp} max={xpNext} label={t.home.progressTitle} />
+      </Card>
 
-            <LoadoutPanel loadout={data.loadout} lookup={lookup} ownedItems={ownedItems} />
-
-            <Section
-              id="profile-inventory"
-              title={t.profile.inventory}
-              aside={<span className="text-[12px] text-mist-500">{format(t.profile.inventoryCount, { n: ownedItems.length })}</span>}
-            >
-              {inventory.data && catalog.data && ownedItems.length === 0 ? (
-                <EmptyState
-                  icon={PackageOpen}
-                  title={t.store.inventoryEmpty}
-                  description={t.store.inventoryEmptyHint}
-                  action={
-                    <ButtonLink href="/store" size="sm">
-                      {t.store.toCatalog}
-                    </ButtonLink>
-                  }
-                />
-              ) : inventory.data && catalog.data ? (
-                <div className="no-scrollbar -mx-4 flex gap-2.5 overflow-x-auto px-4 sm:-mx-6 sm:px-6 md:mx-0 md:px-0">
-                  {ownedItems.map((item) => (
-                    <Link
-                      key={item.id}
-                      href="/store"
-                      className={`rarity-${item.rarity} press surface flex w-28 shrink-0 flex-col items-center gap-2 p-3`}
-                    >
-                      <span className="grid h-16 place-items-center">
-                        <ItemPreview item={item} />
-                      </span>
-                      <span className="max-w-full truncate text-[12px] font-medium">{item.name}</span>
-                    </Link>
-                  ))}
-                </div>
-              ) : (
-                <Skeleton className="h-28 rounded-[var(--radius-card)]" />
-              )}
-            </Section>
-          </>
-        ))}
+      <div className="grid grid-cols-2 gap-2.5">
+        <div className="surface flex flex-col gap-2 p-3.5">
+          <Wallet className="size-4 text-brand-300" />
+          <span className="tabular text-[17px] leading-none font-bold tracking-[-0.02em]">{money(user.wallet_usd)}</span>
+          <span className="truncate text-[11.5px] text-mist-500">{t.profile.balance}</span>
+        </div>
+        <div className="surface flex flex-col gap-2 p-3.5">
+          <Landmark className="size-4 text-brand-300" />
+          <span className="tabular text-[17px] leading-none font-bold tracking-[-0.02em]">{money(user.bank_usd)}</span>
+          <span className="truncate text-[11.5px] text-mist-500">{t.profile.bank}</span>
+        </div>
+      </div>
 
       <Card className="divide-y divide-white/[0.05] px-1">
         {[
           { href: "/tasks", icon: ListChecks, label: t.nav.tasks },
           { href: "/settings", icon: Settings, label: t.nav.settings },
+          ...(user.is_admin ? [{ href: "/admin", icon: Shield, label: "Админка" }] : []),
         ].map(({ href, icon: Icon, label }) => (
           <Link key={href} href={href} className="press flex items-center gap-3 px-3 py-3.5">
             <span className="grid size-9 place-items-center rounded-xl bg-brand-500/12 text-brand-200">
@@ -146,6 +97,10 @@ export function ProfileScreen() {
           </Link>
         ))}
       </Card>
+
+      <Button variant="secondary" block onClick={logout}>
+        Выход
+      </Button>
     </div>
   );
 }

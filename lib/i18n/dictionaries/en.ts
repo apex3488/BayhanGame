@@ -131,6 +131,7 @@ const en: Dictionary = {
     youWon: "You won {amount}",
     youLost: "Bet lost",
     modes: {
+      crash: { name: "Crash", description: "Ride the multiplier and cash out before it crashes — real wallet stakes." },
       mines: { name: "Mines", description: "5×5 field. Open cells and cash out before you hit a mine." },
       updown: { name: "Up / Down", description: "Predict the price direction in 5 seconds. Pays ×1.9." },
       slots: { name: "Slots", description: "Three reels, six symbols and up to ×100." },

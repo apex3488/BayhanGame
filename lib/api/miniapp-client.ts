@@ -17,20 +17,31 @@ function apiRoot(): string {
   return base.replace(/\/+$/, "");
 }
 
+function isSupabaseFunction(url: string): boolean {
+  return url.includes(".supabase.co/functions/");
+}
+
 export async function miniappFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  // Supabase Edge Functions expect the project anon/publishable key.
-  if (env.supabaseAnonKey) {
-    headers.set("apikey", env.supabaseAnonKey);
-  }
+
+  const root = apiRoot();
   const token = getAccessToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  if (isSupabaseFunction(root) && env.supabaseAnonKey) {
+    // Gateway expects a Supabase anon JWT in Authorization / apikey.
+    // Our session JWT must NOT go there — it causes CORS-blocked 401s ("Network error").
+    headers.set("apikey", env.supabaseAnonKey);
+    headers.set("Authorization", `Bearer ${env.supabaseAnonKey}`);
+    if (token) headers.set("X-Bayhan-Token", token);
+  } else if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
 
   let response: Response;
   try {
-    response = await fetch(`${apiRoot()}${path}`, { ...init, headers, credentials: "omit" });
+    response = await fetch(`${root}${path}`, { ...init, headers, credentials: "omit" });
   } catch {
     throw new MiniappApiError(0, "Network error");
   }

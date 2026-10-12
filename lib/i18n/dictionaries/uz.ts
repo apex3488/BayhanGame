@@ -131,6 +131,7 @@ const uz: Dictionary = {
     youWon: "Yutuq {amount}",
     youLost: "Stavka yutqazildi",
     modes: {
+      crash: { name: "Crash", description: "Ko‘paytiruvchini kuzating va qulashdan oldin yutuqni oling — haqiqiy balans." },
       mines: { name: "Mines", description: "5×5 maydon. Kataklarni oching va minaga tushmasdan yutuqni oling." },
       updown: { name: "Up / Down", description: "Kurs yo'nalishini 5 soniyada toping. To'lov ×1.9." },
       slots: { name: "Slots", description: "Uchta baraban, oltita belgi va ×100 gacha ko'paytiruvchi." },

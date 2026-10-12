@@ -46,7 +46,7 @@ function AuthedShell({ children }: { children: ReactNode }) {
         <I18nProvider initialLocale={locale}>
           <GameApiProvider
             api={demoApi}
-            source={{ requested: "demo", active: "demo", isDemo: true, blockReason: null }}
+            source={{ requested: "api", active: "api", isDemo: false, blockReason: null }}
           >
             <ToastProvider>
               <AppShell>{children}</AppShell>
