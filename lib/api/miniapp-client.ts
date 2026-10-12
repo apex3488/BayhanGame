@@ -47,10 +47,16 @@ export async function miniappFetch<T>(path: string, init: RequestInit = {}): Pro
   const url = new URL(path.startsWith("http") ? path : `${root}${path.startsWith("/") ? path : `/${path}`}`);
 
   if (isSupabaseFunction(root) && env.supabaseAnonKey) {
-    // Gateway must see a Supabase anon JWT — custom session JWTs here cause CORS "Network error".
+    // Prefer anon JWT for the Supabase gateway. Custom session JWT stays in
+    // X-Bayhan-Token / query / body — never replace Authorization with it when
+    // verify_jwt is on (Telegram WebViews + CORS "Network error").
     headers.set("apikey", env.supabaseAnonKey);
     headers.set("Authorization", `Bearer ${env.supabaseAnonKey}`);
     applySessionToken(headers, url, token, method);
+  } else if (isSupabaseFunction(root)) {
+    // Missing anon key — still try; edge has verify_jwt=false for bayhan-api.
+    applySessionToken(headers, url, token, method);
+    if (token) headers.set("Authorization", `Bearer ${token}`);
   } else if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }

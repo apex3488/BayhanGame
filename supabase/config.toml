@@ -3,3 +3,8 @@
 
 [functions.miniapp-api]
 verify_jwt = false
+
+# Telegram WebViews often strip Authorization; gateway JWT check then 401s
+# without CORS → browser "Network error". Auth is handled inside the function.
+[functions.bayhan-api]
+verify_jwt = false

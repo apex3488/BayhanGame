@@ -4,19 +4,27 @@ import { SignJWT, jwtVerify } from "npm:jose@5.9.6";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const ORIGIN = Deno.env.get("ALLOWED_ORIGIN") ?? "*";
+const ORIGIN_FALLBACK = Deno.env.get("ALLOWED_ORIGIN") ?? "*";
 const STARTING = Number(Deno.env.get("MINIAPP_STARTING_BALANCE_USD") ?? "50000");
 const CRASH_MIN = Number(Deno.env.get("MINIAPP_CRASH_MIN_BET") ?? "1");
 const CRASH_MAX = Number(Deno.env.get("MINIAPP_CRASH_MAX_BET") ?? "10000");
+/** Growth in multiplier per second (UI + settlement). ~0.06 → 2.00x ≈ 16.7s */
+const CRASH_GROWTH_PER_SEC = Number(Deno.env.get("MINIAPP_CRASH_GROWTH") ?? "0.06");
 const JWT_TTL = Number(Deno.env.get("MINIAPP_JWT_TTL_SECONDS") ?? String(60 * 60 * 24 * 7));
 const BOOTSTRAP = Deno.env.get("MINIAPP_ADMIN_BOOTSTRAP_SECRET") ?? "";
 
-const cors: Record<string, string> = {
-  "Access-Control-Allow-Origin": ORIGIN,
-  "Access-Control-Allow-Headers":
-    "authorization, apikey, content-type, x-client-info, x-bayhan-token, x-access-token, x-authorization",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-};
+function corsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("Origin") || ORIGIN_FALLBACK;
+  const allowOrigin = !origin || origin === "null" ? "*" : origin;
+  return {
+    "Access-Control-Allow-Origin": allowOrigin,
+    "Access-Control-Allow-Headers":
+      "authorization, apikey, content-type, x-client-info, x-supabase-auth, x-bayhan-token, x-access-token, x-authorization, accept",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
+}
 
 type UserRow = {
   id: number;
@@ -43,10 +51,12 @@ const T = {
   audit_logs: "ma_audit_logs",
 } as const;
 
+let _cors: Record<string, string> = { "Access-Control-Allow-Origin": "*" };
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...cors, "Content-Type": "application/json" },
+    headers: { ..._cors, "Content-Type": "application/json" },
   });
 }
 function err(detail: string, status = 400): Response {
@@ -154,8 +164,13 @@ async function sha256Hex(value: string): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
+/**
+ * Provably-fair crash point in basis points.
+ * Full entropy from HMAC + extra random salt baked into server seed at insert.
+ * Distribution: ~5% @1.00x, heavy mass under 3x, rare tails up to 100x.
+ */
 async function crashMultiplierBp(serverSeed: string, clientSeed: string, nonce: number): Promise<number> {
-  const msg = new TextEncoder().encode(`${serverSeed}:${clientSeed}:${nonce}`);
+  const msg = new TextEncoder().encode(`${serverSeed}:${clientSeed}:${nonce}:crash-v2`);
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(serverSeed),
@@ -163,12 +178,22 @@ async function crashMultiplierBp(serverSeed: string, clientSeed: string, nonce: 
     false,
     ["sign"],
   );
-  const digest = [...new Uint8Array(await crypto.subtle.sign("HMAC", key, msg))]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  const h = Number.parseInt(digest.slice(0, 13), 16);
-  if (h % 33 === 0) return 100;
-  return Math.max(101, Math.min(Math.floor((2 ** 52) / ((h % (2 ** 52)) + 1) * 100), 100_000_000));
+  const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, msg));
+  // 52-bit uniform float in [0, 1)
+  let acc = 0;
+  for (let i = 0; i < 7; i++) acc = acc * 256 + bytes[i]!;
+  const u = (acc % Number.MAX_SAFE_INTEGER) / Number.MAX_SAFE_INTEGER;
+  // Instant bust ~5%
+  if (u < 0.05) return 100;
+  // Inverse-curve style: e = house edge ~3%, crash = (1-e)/(1-u')
+  const u2 = (u - 0.05) / 0.95;
+  const e = 0.03;
+  const raw = Math.floor(100 * ((1 - e) / Math.max(1e-12, 1 - u2)));
+  return Math.max(101, Math.min(raw, 10_000));
+}
+
+function growthBpFromElapsed(elapsedSec: number): number {
+  return 100 + Math.floor(Math.max(0, elapsedSec) * CRASH_GROWTH_PER_SEC * 100);
 }
 async function writeAudit(client: SupabaseClient, actor: number | null, action: string, target = "") {
   await client.from(T.audit_logs).insert({ actor_user_id: actor, action, target, detail: "" });
@@ -181,7 +206,7 @@ async function getOrCreateOpenRound(client: SupabaseClient, clientSeed?: string)
   if (running) {
     const crashBp = Number(running.crash_multiplier_bp);
     const started = running.started_at ? Date.parse(String(running.started_at)) : Date.now();
-    const elapsedBp = 100 + Math.floor(Math.max(0, (Date.now() - started) / 1000) * 15);
+    const elapsedBp = growthBpFromElapsed(Math.max(0, (Date.now() - started) / 1000));
     if (elapsedBp < crashBp) return running;
     await client.from(T.crash_rounds).update({ status: "crashed", crashed_at: new Date().toISOString() }).eq("id", running.id);
     await client.from(T.crash_bets).update({ status: "lost", settled_at: new Date().toISOString(), payout_usd: 0 }).eq("round_id", running.id).eq("status", "active");
@@ -223,8 +248,27 @@ function routePath(pathname: string): string {
   return path;
 }
 
+async function settleIfCrashed(
+  client: SupabaseClient,
+  bet: Record<string, unknown>,
+  round: Record<string, unknown>,
+): Promise<{ crashed: boolean; crash_multiplier: number }> {
+  const crashBp = Number(round.crash_multiplier_bp);
+  const startedRaw = bet.created_at
+    ? Date.parse(String(bet.created_at))
+    : round.started_at
+      ? Date.parse(String(round.started_at))
+      : Date.now();
+  const elapsedBp = growthBpFromElapsed((Date.now() - startedRaw) / 1000);
+  if (elapsedBp < crashBp) return { crashed: false, crash_multiplier: 0 };
+  await client.from(T.crash_bets).update({ status: "lost", settled_at: new Date().toISOString(), payout_usd: 0 }).eq("id", bet.id);
+  await client.from(T.crash_rounds).update({ status: "crashed", crashed_at: new Date().toISOString() }).eq("id", round.id);
+  return { crashed: true, crash_multiplier: crashBp / 100 };
+}
+
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+  _cors = corsHeaders(req);
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: _cors });
   if (!SUPABASE_URL || !SERVICE_KEY) return err("not_configured", 503);
   const url = new URL(req.url);
   const path = routePath(url.pathname);
@@ -345,11 +389,40 @@ Deno.serve(async (req: Request) => {
     }
 
     if (req.method === "GET" && path === "/api/crash/state") {
-      const round = await getOrCreateOpenRound(client);
-      const { data: active } = await client.from(T.crash_bets).select("*").eq("user_id", user.id).eq("status", "active").maybeSingle();
-      const { data: history } = await client.from(T.crash_rounds).select("public_id,crash_multiplier_bp,status,crashed_at").in("status", ["crashed", "settled"]).order("id", { ascending: false }).limit(10);
+      const { data: activeRow } = await client
+        .from(T.crash_bets)
+        .select("*, ma_crash_rounds(*)")
+        .eq("user_id", user.id)
+        .eq("status", "active")
+        .maybeSingle();
+
+      let justCrashed: { crash_multiplier: number } | null = null;
+      if (activeRow?.ma_crash_rounds) {
+        const settled = await settleIfCrashed(
+          client,
+          activeRow as Record<string, unknown>,
+          activeRow.ma_crash_rounds as Record<string, unknown>,
+        );
+        if (settled.crashed) justCrashed = { crash_multiplier: settled.crash_multiplier };
+      }
+
+      const { data: active } = justCrashed
+        ? { data: null }
+        : await client.from(T.crash_bets).select("*").eq("user_id", user.id).eq("status", "active").maybeSingle();
+
+      const round = activeRow?.ma_crash_rounds && !justCrashed
+        ? activeRow.ma_crash_rounds
+        : await getOrCreateOpenRound(client);
+
+      const { data: history } = await client
+        .from(T.crash_rounds)
+        .select("public_id,crash_multiplier_bp,status,crashed_at")
+        .in("status", ["crashed", "settled"])
+        .order("id", { ascending: false })
+        .limit(10);
+
       return json({
-        round: mapRound(round as Record<string, unknown>, false),
+        round: mapRound(round as Record<string, unknown>, Boolean(justCrashed)),
         active_bet: active
           ? {
               id: active.id,
@@ -360,6 +433,8 @@ Deno.serve(async (req: Request) => {
               created_at: active.created_at,
             }
           : null,
+        just_crashed: justCrashed,
+        growth_per_sec: CRASH_GROWTH_PER_SEC,
         history: (history ?? []).map((h) => ({
           public_id: h.public_id,
           crash_multiplier: Number(h.crash_multiplier_bp) / 100,
@@ -440,7 +515,7 @@ Deno.serve(async (req: Request) => {
           ? Date.parse(String(round.started_at))
           : Date.now();
       const elapsed = Math.max(0, (Date.now() - startedRaw) / 1000);
-      let multBp = Math.min(100 + Math.floor(elapsed * 15), crashBp);
+      let multBp = Math.min(growthBpFromElapsed(elapsed), crashBp);
       const clientMult = body.displayed_multiplier ?? body.multiplier;
       if (clientMult != null && Number.isFinite(Number(clientMult))) {
         multBp = Math.min(multBp, Math.round(Number(clientMult) * 100));

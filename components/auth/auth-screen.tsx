@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useAuth } from "@/lib/auth/auth-provider";
 import { MiniappApiError } from "@/lib/api/miniapp-client";
+import { env } from "@/lib/config/env";
 
 export function AuthScreen() {
   const { login, register, status } = useAuth();
@@ -103,7 +104,18 @@ export function AuthScreen() {
               minLength={8}
             />
           </label>
-          {error && <p className="text-sm text-red-300">{error}</p>}
+          {error && (
+            <div className="space-y-1 text-sm text-red-300">
+              <p>{error}</p>
+              {error.toLowerCase().includes("network") && (
+                <p className="text-xs text-mist-400">
+                  API: {env.gameApiUrl ? new URL(env.gameApiUrl).host : "не задан"} · откройте Mini App с{" "}
+                  <span className="text-mist-200">apex3488.github.io/BayhanGame</span> и обновите страницу после
+                  деплоя.
+                </p>
+              )}
+            </div>
+          )}
           <Button type="submit" block loading={busy}>
             {mode === "login" ? "Войти" : "Создать аккаунт"}
           </Button>

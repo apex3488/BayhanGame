@@ -13,6 +13,7 @@ interface CrashState {
     server_seed_hash: string;
     status: string;
     started_at: string | null;
+    crash_multiplier?: number;
   };
   active_bet: {
     id: number;
@@ -22,6 +23,8 @@ interface CrashState {
     cashout_multiplier: number | null;
     created_at?: string | null;
   } | null;
+  just_crashed?: { crash_multiplier: number } | null;
+  growth_per_sec?: number;
   history: Array<{ public_id: string; crash_multiplier: number }>;
 }
 
@@ -29,9 +32,10 @@ function formatUsd(value: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
 }
 
-/** Same curve as server: 1.00x + 0.15x per second. */
-function growthFromElapsed(elapsedSec: number): number {
-  return Number((1 + Math.max(0, elapsedSec) * 0.15).toFixed(2));
+const DEFAULT_GROWTH = 0.06;
+
+function growthFromElapsed(elapsedSec: number, perSec: number): number {
+  return Number((1 + Math.max(0, elapsedSec) * perSec).toFixed(2));
 }
 
 export function CrashScreen() {
@@ -43,26 +47,42 @@ export function CrashScreen() {
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<"idle" | "flying" | "cashed" | "crashed">("idle");
   const [lastPayout, setLastPayout] = useState<number | null>(null);
+  const [crashAt, setCrashAt] = useState<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pointsRef = useRef<Array<{ t: number; m: number }>>([]);
-  /** Local flight clock — never reuse a stale round.started_at from a previous round. */
   const flightStartRef = useRef<number | null>(null);
+  const growthRef = useRef(DEFAULT_GROWTH);
+  const phaseRef = useRef(phase);
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
 
   const load = useCallback(async () => {
     const data = await miniappFetch<CrashState>("/api/crash/state");
+    if (data.growth_per_sec && data.growth_per_sec > 0) growthRef.current = data.growth_per_sec;
     setState(data);
+
+    if (data.just_crashed) {
+      flightStartRef.current = null;
+      setCrashAt(data.just_crashed.crash_multiplier);
+      setMult(data.just_crashed.crash_multiplier);
+      setPhase("crashed");
+      await refresh();
+      return;
+    }
+
     if (data.active_bet && data.round.status === "running") {
       setPhase("flying");
-      // Prefer bet.created_at (this stake), not an old round.started_at.
       if (flightStartRef.current == null) {
         const fromBet = data.active_bet.created_at ? Date.parse(data.active_bet.created_at) : NaN;
         flightStartRef.current = Number.isFinite(fromBet) ? fromBet : Date.now();
       }
-    } else if (!data.active_bet) {
+    } else if (!data.active_bet && phaseRef.current === "flying") {
       flightStartRef.current = null;
-      setPhase((p) => (p === "flying" ? "idle" : p));
+      setPhase("idle");
     }
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -71,6 +91,15 @@ export function CrashScreen() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  // Poll server while flying so the round can crash (not infinite).
+  useEffect(() => {
+    if (phase !== "flying") return;
+    const id = window.setInterval(() => {
+      void load().catch(() => undefined);
+    }, 450);
+    return () => window.clearInterval(id);
+  }, [phase, load]);
+
   const flying = phase === "flying" && Boolean(state?.active_bet);
 
   useEffect(() => {
@@ -78,15 +107,18 @@ export function CrashScreen() {
     if (flightStartRef.current == null) flightStartRef.current = Date.now();
     const start = flightStartRef.current;
     pointsRef.current = [{ t: 0, m: 1 }];
-    setMult(1);
+    const boot = window.setTimeout(() => setMult(1), 0);
     const id = window.setInterval(() => {
       const elapsed = Math.max(0, (Date.now() - start) / 1000);
-      const next = growthFromElapsed(elapsed);
+      const next = growthFromElapsed(elapsed, growthRef.current);
       setMult(next);
       pointsRef.current.push({ t: elapsed, m: next });
-      if (pointsRef.current.length > 240) pointsRef.current.shift();
-    }, 40);
-    return () => window.clearInterval(id);
+      if (pointsRef.current.length > 280) pointsRef.current.shift();
+    }, 32);
+    return () => {
+      window.clearTimeout(boot);
+      window.clearInterval(id);
+    };
   }, [flying, state?.active_bet?.id]);
 
   useEffect(() => {
@@ -96,6 +128,8 @@ export function CrashScreen() {
     if (!ctx) return;
 
     let raf = 0;
+    const particles: Array<{ x: number; y: number; vx: number; vy: number; life: number }> = [];
+
     const draw = () => {
       const dpr = window.devicePixelRatio || 1;
       const w = canvas.clientWidth;
@@ -107,15 +141,22 @@ export function CrashScreen() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
 
-      ctx.strokeStyle = "rgba(255,255,255,0.04)";
+      // atmosphere
+      const sky = ctx.createLinearGradient(0, 0, 0, h);
+      sky.addColorStop(0, "rgba(37,99,235,0.18)");
+      sky.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, w, h);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.045)";
       ctx.lineWidth = 1;
-      for (let x = 0; x < w; x += 36) {
+      for (let x = 0; x < w; x += 40) {
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, h);
         ctx.stroke();
       }
-      for (let y = 0; y < h; y += 28) {
+      for (let y = 0; y < h; y += 32) {
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(w, y);
@@ -125,39 +166,115 @@ export function CrashScreen() {
       const pts = pointsRef.current;
       const last = pts.length > 1 ? pts[pts.length - 1] : undefined;
       if (last) {
-        const maxT = Math.max(last.t, 1);
-        const maxM = Math.max(last.m, 2);
-        const grad = ctx.createLinearGradient(0, h, w, 0);
-        grad.addColorStop(0, "#2563eb");
-        grad.addColorStop(1, phase === "crashed" ? "#ef4444" : "#93c5fd");
+        const maxT = Math.max(last.t, 0.8);
+        const maxM = Math.max(last.m, 1.8);
+        const toXY = (p: { t: number; m: number }) => {
+          const x = (p.t / maxT) * (w - 36) + 18;
+          const y = h - 22 - ((p.m - 1) / (maxM - 1)) * (h - 48);
+          return { x, y };
+        };
+
+        // glow fill under curve
         ctx.beginPath();
         pts.forEach((p, i) => {
-          const x = (p.t / maxT) * (w - 24) + 12;
-          const y = h - 16 - ((p.m - 1) / (maxM - 1)) * (h - 36);
+          const { x, y } = toXY(p);
           if (i === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         });
+        const end = toXY(last);
+        ctx.lineTo(end.x, h - 8);
+        ctx.lineTo(toXY(pts[0]!).x, h - 8);
+        ctx.closePath();
+        const fill = ctx.createLinearGradient(0, 0, 0, h);
+        fill.addColorStop(0, phase === "crashed" ? "rgba(239,68,68,0.28)" : "rgba(59,130,246,0.28)");
+        fill.addColorStop(1, "rgba(59,130,246,0)");
+        ctx.fillStyle = fill;
+        ctx.fill();
+
+        // curve stroke
+        ctx.beginPath();
+        pts.forEach((p, i) => {
+          const { x, y } = toXY(p);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        const grad = ctx.createLinearGradient(0, h, w, 0);
+        grad.addColorStop(0, "#1d4ed8");
+        grad.addColorStop(1, phase === "crashed" ? "#f87171" : "#bfdbfe");
         ctx.strokeStyle = grad;
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 3.5;
         ctx.lineJoin = "round";
         ctx.stroke();
 
-        const lx = (last.t / maxT) * (w - 24) + 12;
-        const ly = h - 16 - ((last.m - 1) / (maxM - 1)) * (h - 36);
-        ctx.beginPath();
-        ctx.arc(lx, ly, 6, 0, Math.PI * 2);
-        ctx.fillStyle = phase === "crashed" ? "#f87171" : "#fff";
-        ctx.fill();
-        ctx.shadowColor = phase === "crashed" ? "#ef4444" : "#3b82f6";
-        ctx.shadowBlur = 16;
-        ctx.beginPath();
-        ctx.arc(lx, ly, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
+        // rocket / crash burst
+        const { x: lx, y: ly } = end;
+        if (phase === "flying" && Math.random() > 0.4) {
+          particles.push({
+            x: lx - 6,
+            y: ly + 2,
+            vx: -1.2 - Math.random() * 1.5,
+            vy: (Math.random() - 0.5) * 1.4,
+            life: 1,
+          });
+        }
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i]!;
+          p.x += p.vx;
+          p.y += p.vy;
+          p.life -= 0.04;
+          if (p.life <= 0) {
+            particles.splice(i, 1);
+            continue;
+          }
+          ctx.globalAlpha = p.life;
+          ctx.fillStyle = phase === "crashed" ? "#fca5a5" : "#93c5fd";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 2.2 * p.life, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+
+        ctx.save();
+        ctx.translate(lx, ly);
+        const angle = Math.atan2(
+          (last.m - (pts[pts.length - 2]?.m ?? last.m)) * -1,
+          Math.max(0.05, last.t - (pts[pts.length - 2]?.t ?? last.t)),
+        );
+        ctx.rotate(angle);
+        if (phase === "crashed") {
+          ctx.fillStyle = "rgba(248,113,113,0.9)";
+          for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * Math.PI * 2;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(Math.cos(a) * 16, Math.sin(a) * 16);
+            ctx.strokeStyle = `rgba(248,113,113,${0.35 + Math.random() * 0.4})`;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+          ctx.beginPath();
+          ctx.arc(0, 0, 8, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          ctx.shadowColor = "#60a5fa";
+          ctx.shadowBlur = 18;
+          ctx.fillStyle = "#fff";
+          ctx.beginPath();
+          ctx.moveTo(10, 0);
+          ctx.lineTo(-8, -6);
+          ctx.lineTo(-4, 0);
+          ctx.lineTo(-8, 6);
+          ctx.closePath();
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = "#3b82f6";
+          ctx.fillRect(-10, -2, 6, 4);
+        }
+        ctx.restore();
       } else {
-        ctx.fillStyle = "rgba(148,163,184,0.45)";
+        ctx.fillStyle = "rgba(148,163,184,0.5)";
         ctx.font = "600 13px ui-sans-serif, system-ui";
-        ctx.fillText("Ожидание ставки…", 16, h / 2);
+        ctx.fillText("Сделайте ставку — ракета стартует с 1.00x", 16, h / 2);
       }
 
       raf = requestAnimationFrame(draw);
@@ -170,6 +287,7 @@ export function CrashScreen() {
     setBusy(true);
     setError(null);
     setLastPayout(null);
+    setCrashAt(null);
     try {
       const bet = await miniappFetch<{
         id: number;
@@ -217,9 +335,12 @@ export function CrashScreen() {
       flightStartRef.current = null;
       await Promise.all([load(), refresh()]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Cashout failed");
-      setPhase("crashed");
-      flightStartRef.current = null;
+      const msg = e instanceof Error ? e.message : "Cashout failed";
+      setError(msg);
+      if (msg.toLowerCase().includes("crash")) {
+        setPhase("crashed");
+        flightStartRef.current = null;
+      }
       await load().catch(() => undefined);
       await refresh();
     } finally {
@@ -249,7 +370,7 @@ export function CrashScreen() {
           <div>
             <p
               className={cn(
-                "text-6xl font-black tracking-tight tabular-nums sm:text-7xl",
+                "text-6xl font-black tracking-tight tabular-nums transition-colors sm:text-7xl",
                 phase === "crashed" ? "text-red-400" : phase === "cashed" ? "text-emerald-300" : "text-white",
               )}
             >
@@ -260,7 +381,7 @@ export function CrashScreen() {
               {phase === "flying" && "Полёт…"}
               {phase === "idle" && "Сделайте ставку"}
               {phase === "cashed" && lastPayout != null && `Забрано ${formatUsd(lastPayout)}`}
-              {phase === "crashed" && "Краш!"}
+              {phase === "crashed" && (crashAt != null ? `Краш на ${crashAt.toFixed(2)}x` : "Краш!")}
             </p>
           </div>
           <div className="hidden text-right sm:block">
@@ -268,7 +389,7 @@ export function CrashScreen() {
             <p className="max-w-[9rem] truncate font-mono text-xs text-mist-300">{state?.round.public_id ?? "—"}</p>
           </div>
         </div>
-        <canvas ref={canvasRef} className="relative mt-2 h-52 w-full sm:h-64" />
+        <canvas ref={canvasRef} className="relative mt-2 h-56 w-full sm:h-72" />
         <div className="relative flex flex-wrap gap-2 px-4 pb-4">
           {(state?.history ?? []).slice(0, 8).map((item) => (
             <span

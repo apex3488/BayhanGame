@@ -57,18 +57,56 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
 
+      # Prefer Actions variables; fall back to committed .env.production so Telegram
+      # builds never ship without NEXT_PUBLIC_GAME_API_URL / anon key.
+      - name: Resolve public env
+        id: env
+        shell: bash
+        env:
+          VAR_BOT_USERNAME: ${{ vars.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME }}
+          VAR_DATA_SOURCE: ${{ vars.NEXT_PUBLIC_DATA_SOURCE }}
+          VAR_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          VAR_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          VAR_SUPABASE_FUNCTION_NAME: ${{ vars.NEXT_PUBLIC_SUPABASE_FUNCTION_NAME }}
+          VAR_GAME_API_URL: ${{ vars.NEXT_PUBLIC_GAME_API_URL }}
+        run: |
+          set -euo pipefail
+          if [ -f .env.production ]; then
+            set -a
+            # shellcheck disable=SC1091
+            source .env.production
+            set +a
+          fi
+          out() {
+            local key="$1"
+            local val="$2"
+            # Heredoc so JWT '=' padding cannot break GITHUB_OUTPUT.
+            {
+              echo "${key}<<EOF"
+              echo "${val}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          }
+          out BOT_USERNAME "${VAR_BOT_USERNAME:-${NEXT_PUBLIC_TELEGRAM_BOT_USERNAME:-}}"
+          out DATA_SOURCE "${VAR_DATA_SOURCE:-${NEXT_PUBLIC_DATA_SOURCE:-api}}"
+          out SUPABASE_URL "${VAR_SUPABASE_URL:-${NEXT_PUBLIC_SUPABASE_URL:-}}"
+          out SUPABASE_ANON_KEY "${VAR_SUPABASE_ANON_KEY:-${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}}"
+          out SUPABASE_FUNCTION_NAME "${VAR_SUPABASE_FUNCTION_NAME:-${NEXT_PUBLIC_SUPABASE_FUNCTION_NAME:-bayhan-api}}"
+          out GAME_API_URL "${VAR_GAME_API_URL:-${NEXT_PUBLIC_GAME_API_URL:-}}"
+          test -n "${VAR_GAME_API_URL:-${NEXT_PUBLIC_GAME_API_URL:-}}"
+          test -n "${VAR_SUPABASE_ANON_KEY:-${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}}"
+
       - name: Build static export
         run: npm run build
         env:
           NEXT_PUBLIC_BASE_PATH: ${{ steps.base.outputs.base_path }}
-          # Public only — configure in Settings → Secrets and variables → Actions → Variables.
-          # Never put BOT_TOKEN or service_role here.
-          NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: ${{ vars.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME }}
-          NEXT_PUBLIC_DATA_SOURCE: ${{ vars.NEXT_PUBLIC_DATA_SOURCE }}
-          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          NEXT_PUBLIC_SUPABASE_FUNCTION_NAME: ${{ vars.NEXT_PUBLIC_SUPABASE_FUNCTION_NAME }}
-          NEXT_PUBLIC_GAME_API_URL: ${{ vars.NEXT_PUBLIC_GAME_API_URL }}
+          # Public only — never put BOT_TOKEN or service_role here.
+          NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: ${{ steps.env.outputs.BOT_USERNAME }}
+          NEXT_PUBLIC_DATA_SOURCE: ${{ steps.env.outputs.DATA_SOURCE }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ steps.env.outputs.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ steps.env.outputs.SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_SUPABASE_FUNCTION_NAME: ${{ steps.env.outputs.SUPABASE_FUNCTION_NAME }}
+          NEXT_PUBLIC_GAME_API_URL: ${{ steps.env.outputs.GAME_API_URL }}
 
       - name: Verify static export
         run: npm run verify:export
