@@ -85,17 +85,21 @@ export function AdminScreen() {
           <input type="number" className="rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-white" value={promoUsd} onChange={(e) => setPromoUsd(Number(e.target.value))} />
           <Button
             onClick={async () => {
-              await miniappFetch("/api/admin/promos", {
-                method: "POST",
-                body: JSON.stringify({
-                  code: promoCode,
-                  reward_type: "usd",
-                  reward_usd: promoUsd,
-                  description: "Admin promo",
-                }),
-              });
-              setMessage(`Промо ${promoCode} создан`);
-              await reload();
+              try {
+                await miniappFetch("/api/admin/promos", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    code: promoCode,
+                    reward_type: "usd",
+                    reward_usd: promoUsd,
+                    description: "Admin promo",
+                  }),
+                });
+                setMessage(`Промо ${promoCode.toUpperCase()} создан`);
+                await reload();
+              } catch (e) {
+                setMessage(e instanceof Error ? e.message : "Не удалось создать промокод");
+              }
             }}
           >
             Создать

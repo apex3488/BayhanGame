@@ -196,8 +196,14 @@ async function crashMultiplierBp(serverSeed: string, clientSeed: string, nonce: 
 function growthBpFromElapsed(elapsedSec: number): number {
   return 100 + Math.floor(Math.max(0, elapsedSec) * CRASH_GROWTH_PER_SEC * 100);
 }
-async function writeAudit(client: SupabaseClient, actor: number | null, action: string, target = "") {
-  await client.from(T.audit_logs).insert({ actor_user_id: actor, action, target, detail: "" });
+async function writeAudit(
+  client: SupabaseClient,
+  actor: number | null,
+  action: string,
+  target = "",
+  detail = "",
+) {
+  await client.from(T.audit_logs).insert({ actor_user_id: actor, action, target, detail: detail.slice(0, 500) });
 }
 async function getOrCreateOpenRound(client: SupabaseClient, clientSeed?: string) {
   const { data: open } = await client.from(T.crash_rounds).select("*").eq("status", "open").order("id", { ascending: false }).limit(1).maybeSingle();
@@ -600,8 +606,136 @@ Deno.serve(async (req: Request) => {
 
     if (req.method === "GET" && path === "/api/admin/dashboard") {
       if (!user.is_admin) return err("Forbidden", 403);
-      const { count } = await client.from(T.users).select("*", { count: "exact", head: true });
-      return json({ players_total: count ?? 0, service: "bayhan-miniapp-v2" });
+      const [{ count: players }, { data: money }, { count: crashRounds }, { count: promoCodes }] = await Promise.all([
+        client.from(T.users).select("*", { count: "exact", head: true }),
+        client.from(T.users).select("wallet_usd,bank_usd"),
+        client.from(T.crash_rounds).select("*", { count: "exact", head: true }),
+        client.from(T.promo_codes).select("*", { count: "exact", head: true }),
+      ]);
+      const walletSum = (money ?? []).reduce((s, r) => s + Number(r.wallet_usd ?? 0), 0);
+      const bankSum = (money ?? []).reduce((s, r) => s + Number(r.bank_usd ?? 0), 0);
+      return json({
+        players: players ?? 0,
+        wallet_sum_usd: walletSum,
+        bank_sum_usd: bankSum,
+        crash_rounds: crashRounds ?? 0,
+        promo_codes: promoCodes ?? 0,
+        service: "bayhan-miniapp-v2",
+      });
+    }
+
+    if (req.method === "GET" && path === "/api/admin/players") {
+      if (!user.is_admin) return err("Forbidden", 403);
+      const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+      let query = client
+        .from(T.users)
+        .select("id,login,display_name,wallet_usd,bank_usd,is_banned,is_admin,created_at")
+        .order("id", { ascending: false })
+        .limit(100);
+      if (q) query = query.ilike("login", `%${q}%`);
+      const { data, error } = await query;
+      if (error) return err(error.message, 500);
+      return json(data ?? []);
+    }
+
+    if (req.method === "POST" && path === "/api/admin/promos") {
+      if (!user.is_admin) return err("Forbidden", 403);
+      const body = postBody as {
+        code?: string;
+        description?: string;
+        reward_type?: string;
+        reward_usd?: number;
+        reward_item_id?: number;
+        max_total?: number | null;
+        max_per_user?: number;
+        is_active?: boolean;
+      } | null;
+      const code = (body?.code ?? "").trim().toUpperCase();
+      if (!/^[A-Z0-9_-]{3,32}$/.test(code)) return err("Invalid promo code");
+      const rewardType = body?.reward_type ?? "usd";
+      let payload: Record<string, unknown>;
+      if (rewardType === "usd") {
+        const rewardUsd = Math.floor(Number(body?.reward_usd ?? 0));
+        if (!Number.isFinite(rewardUsd) || rewardUsd <= 0) return err("reward_usd required");
+        payload = { usd: rewardUsd };
+      } else if (rewardType === "item") {
+        const itemId = Math.floor(Number(body?.reward_item_id ?? 0));
+        if (!itemId) return err("reward_item_id required");
+        payload = { item_id: itemId };
+      } else {
+        return err("Unsupported reward_type");
+      }
+      const { data: existing } = await client.from(T.promo_codes).select("id").eq("code", code).maybeSingle();
+      if (existing) return err("Promo code already exists", 409);
+      const { data: promo, error } = await client.from(T.promo_codes).insert({
+        code,
+        description: (body?.description ?? "Admin promo").slice(0, 200),
+        reward_type: rewardType,
+        reward_payload: JSON.stringify(payload),
+        max_total: body?.max_total ?? null,
+        max_per_user: Math.max(1, Math.floor(Number(body?.max_per_user ?? 1))),
+        is_active: body?.is_active !== false,
+      }).select("*").single();
+      if (error || !promo) return err(error?.message ?? "Promo create failed", 500);
+      await writeAudit(client, user.id, "admin.promo_create", code);
+      return json({ ok: true, code: promo.code, id: promo.id, reward_type: promo.reward_type, reward_payload: promo.reward_payload });
+    }
+
+    if (req.method === "POST" && path === "/api/admin/balance/adjust") {
+      if (!user.is_admin) return err("Forbidden", 403);
+      const body = postBody as {
+        user_id?: number;
+        amount_usd?: number;
+        reason?: string;
+        idempotency_key?: string;
+      } | null;
+      if (!body?.idempotency_key || body.user_id == null || body.amount_usd == null) {
+        return err("user_id, amount_usd, idempotency_key required");
+      }
+      const amount = Math.floor(Number(body.amount_usd));
+      if (!Number.isFinite(amount) || amount === 0) return err("Invalid amount");
+      const key = `admin-adj:${body.idempotency_key}`;
+      const { data: existing } = await client.from(T.transactions).select("*").eq("idempotency_key", key).maybeSingle();
+      if (existing) return json({ ok: true, transaction_id: existing.id });
+      const { data: target } = await client.from(T.users).select("*").eq("id", body.user_id).maybeSingle();
+      if (!target) return err("Not found", 404);
+      const wallet = Number(target.wallet_usd) + amount;
+      if (wallet < 0) return err("Insufficient wallet balance");
+      await client.from(T.users).update({ wallet_usd: wallet, updated_at: new Date().toISOString() }).eq("id", target.id);
+      const { data: tx, error } = await client.from(T.transactions).insert({
+        user_id: target.id,
+        type: "ADMIN_ADJUST",
+        amount_usd: amount,
+        wallet_after: wallet,
+        bank_after: target.bank_usd,
+        reason: (body.reason ?? "Admin adjustment").slice(0, 200),
+        status: "completed",
+        idempotency_key: key,
+      }).select("*").single();
+      if (error) return err(error.message, 500);
+      await writeAudit(client, user.id, "admin.balance", String(target.id), `${amount}:${body.reason ?? ""}`);
+      return json({ ok: true, transaction_id: tx.id, wallet_usd: wallet });
+    }
+
+    const banMatch = path.match(/^\/api\/admin\/players\/(\d+)\/(ban|unban)$/);
+    if (req.method === "POST" && banMatch) {
+      if (!user.is_admin) return err("Forbidden", 403);
+      const targetId = Number(banMatch[1]);
+      const action = banMatch[2]!;
+      const { data: target } = await client.from(T.users).select("*").eq("id", targetId).maybeSingle();
+      if (!target) return err("Not found", 404);
+      if (action === "ban" && target.is_admin) return err("Cannot ban admin", 400);
+      const reason = action === "ban"
+        ? String((postBody as { reason?: string } | null)?.reason ?? "policy").slice(0, 200)
+        : null;
+      const { error } = await client.from(T.users).update({
+        is_banned: action === "ban",
+        ban_reason: reason,
+        updated_at: new Date().toISOString(),
+      }).eq("id", targetId);
+      if (error) return err(error.message, 500);
+      await writeAudit(client, user.id, action === "ban" ? "admin.ban" : "admin.unban", String(targetId), reason ?? "");
+      return json({ ok: true });
     }
 
     return err("Not found", 404);
